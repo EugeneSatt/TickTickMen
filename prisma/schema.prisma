@@ -1,0 +1,235 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  IDEA
+  ACTIVE
+  PRE_LAUNCH
+  PAUSED
+  DONE
+}
+
+enum TaskSource {
+  TICKTICK
+  TELEGRAM
+  MANUAL
+  REMINDERS
+}
+
+enum TaskStatus {
+  OPEN
+  DONE
+  DELETED
+}
+
+enum TaskCategory {
+  GROWTH
+  MONEY
+  SYSTEM
+  LIFE
+  UNKNOWN
+}
+
+enum MoodLevel {
+  M2
+  M1
+  Z0
+  P1
+  P2
+}
+
+enum ReasonCode {
+  NO_CLARITY
+  BIG_TASK
+  FEAR_CONSEQUENCES
+  SLEEP
+  FATIGUE
+  SOCIAL_ANXIETY
+  CONTEXT_SWITCH
+  OVERLOAD
+  OTHER
+}
+
+model User {
+  id          String        @id @default(cuid())
+  tgUserId    String        @unique
+  timezone    String        @default("Europe/Moscow")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  projects    Project[]
+  projectNotes ProjectNote[]
+  tasks       Task[]
+  taskEvents  TaskEvent[]
+  checkIns    DailyCheckIn[]
+  features    DailyFeatures[]
+  summaries   Summary[]
+  rules       UserRule[]
+}
+
+model Project {
+  id            String        @id @default(cuid())
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name          String
+  status        ProjectStatus @default(IDEA)
+  vision        String?
+  metric        String?
+  horizonMonths Int?
+  revenueGoal   Float?
+  riskLevel     Int?
+  energyScore   Int?
+  weeklyFocus   Boolean       @default(false)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  notes         ProjectNote[]
+  tasks         Task[]
+
+  @@unique([userId, name])
+  @@index([userId, weeklyFocus])
+  @@index([userId, status])
+}
+
+model ProjectNote {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  text      String
+  kind      String?
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  externalId  String?
+  source      TaskSource
+  title       String
+  note        String?
+  projectName String?
+  tags        String[]
+  category    TaskCategory @default(UNKNOWN)
+  status      TaskStatus   @default(OPEN)
+  dueAt       DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  firstSeenAt DateTime     @default(now())
+  lastSeenAt  DateTime     @default(now())
+  projectId   String?
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  events      TaskEvent[]
+
+  @@unique([userId, source, externalId])
+  @@index([userId, status])
+  @@index([projectId])
+}
+
+model TaskEvent {
+  id            String     @id @default(cuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId        String
+  task          Task       @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  type          String
+  at            DateTime   @default(now())
+  fromStatus    TaskStatus?
+  toStatus      TaskStatus?
+  fromDueAt     DateTime?
+  toDueAt       DateTime?
+  meta          Json?
+
+  @@index([userId, at])
+  @@index([taskId, at])
+}
+
+model DailyCheckIn {
+  id         String     @id @default(cuid())
+  userId     String
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  day        DateTime
+  isMorning  Boolean
+  energy     Int
+  focus      Int
+  mood       MoodLevel
+  reasonCode ReasonCode?
+  note       String?
+  createdAt  DateTime   @default(now())
+
+  @@unique([userId, day, isMorning])
+  @@index([userId, day])
+}
+
+model DailyFeatures {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  day             DateTime
+  tasksAdded      Int      @default(0)
+  tasksDone       Int      @default(0)
+  tasksOpen       Int      @default(0)
+  overdueOpen     Int      @default(0)
+  doneGrowth      Int      @default(0)
+  doneMoney       Int      @default(0)
+  doneSystem      Int      @default(0)
+  doneLife        Int      @default(0)
+  shareGrowth     Float    @default(0)
+  shareMoney      Float    @default(0)
+  shareSystem     Float    @default(0)
+  shareLife       Float    @default(0)
+  closureRate     Float    @default(0)
+  avgTaskAgeDays  Float    @default(0)
+  avgDoneTimeDays Float    @default(0)
+  morningEnergy   Int?
+  morningFocus    Int?
+  morningMoodInt  Int?
+  eveningEnergy   Int?
+  eveningMoodInt  Int?
+  burnoutFlag     Boolean  @default(false)
+  frictionFlag    Boolean  @default(false)
+  notes           Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, day])
+  @@index([userId, day])
+}
+
+model Summary {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  period    String
+  day       DateTime
+  text      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, period, day])
+}
+
+model UserRule {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  key       String   @unique
+  value     Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, isActive])
+}
