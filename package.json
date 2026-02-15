@@ -7,6 +7,7 @@
     "dev": "ts-node src/bot.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/bot.js",
+    "cron": "node dist/jobs/cron.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "test": "echo \"No tests configured\""
@@ -21,8 +22,7 @@
     "dotenv": "^17.2.4",
     "form-data": "^4.0.5",
     "grammy": "^1.40.0",
-    "luxon": "^3.7.1",
-    "node-cron": "^4.2.1"
+    "luxon": "^3.7.1"
   },
   "devDependencies": {
     "@types/luxon": "^3.7.1",

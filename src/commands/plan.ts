@@ -1,7 +1,7 @@
 import type { Context } from "grammy";
-import { prisma } from "../db/prisma";
 import { ensureUserByTelegramId } from "../services/user.service";
 import { runPlanAndStoreSuggestions } from "../services/planning.service";
+import { buildPlanMessage } from "../utils/plan-message";
 import { safeReply } from "../utils/telegram";
 
 export const planCommand = async (ctx: Context): Promise<void> => {
@@ -26,59 +26,6 @@ export const planCommand = async (ctx: Context): Promise<void> => {
     return;
   }
 
-  const focusTaskIds = plan.focus.map((item) => item.taskId);
-  const focusTasks = focusTaskIds.length
-    ? await prisma.task.findMany({
-        where: {
-          userId: user.id,
-          id: { in: focusTaskIds },
-        },
-        select: {
-          id: true,
-          title: true,
-        },
-      })
-    : [];
-
-  const focusTitleById = new Map(focusTasks.map((task) => [task.id, task.title]));
-  const focusTitles = plan.focus.map((item) => focusTitleById.get(item.taskId) ?? item.reason).filter(Boolean);
-  const warningItems = plan.warnings
-    .flatMap((warning) => warning.split(";"))
-    .map((warning) => warning.trim())
-    .filter(Boolean);
-  const focusLines =
-    focusTitles.length > 0
-      ? focusTitles.map((title, index) => `${index + 1}. ${title}`)
-      : ["—"];
-  const warningLines =
-    warningItems.length > 0
-      ? warningItems.map((warning, index) => `${index + 1}. ${warning}`)
-      : ["—"];
-
-  const lines = [
-    "🧭 План на день",
-    "",
-    "Фокус:",
-    ...focusLines,
-    "",
-    `Fallback-варианты: ${plan.fallbackOptions.length || 0}`,
-    "",
-    "Не делать:",
-    plan.doNotDo || "—",
-    "",
-    "Риск дня:",
-    plan.riskOfTheDay || "—",
-    "",
-    "Предупреждения:",
-    ...warningLines,
-    "",
-    "Стратегия:",
-    plan.strategyNote || "—",
-    "",
-    `Категорий к применению: ${plan.categorySuggestions.length}`,
-    "",
-    "Чтобы применить категории: /apply_categories",
-  ];
-
-  await safeReply(ctx, lines.join("\n"));
+  const message = await buildPlanMessage(user.id, plan);
+  await safeReply(ctx, message);
 };

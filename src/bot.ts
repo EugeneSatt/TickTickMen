@@ -35,7 +35,6 @@ import { startCommand } from "./commands/start";
 import { taskDoneCallbackHandler, taskDoneCommand } from "./commands/task-done";
 import { taskProjectCommand } from "./commands/task-project";
 import { tasksCommand } from "./commands/tasks";
-import { startCronJobs } from "./cron/jobs";
 
 const token = process.env.BOT_TOKEN;
 const allowedTgUserId = process.env.ALLOWED_TG_USER_ID?.trim() || "841208806";
@@ -120,7 +119,6 @@ const startBot = async (): Promise<void> => {
 
   const maxAttempts = 2;
   try {
-    startCronJobs(bot as any);
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         console.log(`[Bot] Starting Telegram bot... (attempt ${attempt}/${maxAttempts})`);

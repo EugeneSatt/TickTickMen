@@ -7,7 +7,9 @@ import {
   saveDailyCheckin,
   setVoiceCheckinPending,
 } from "../services/emotion.service";
+import { runPlanAndStoreSuggestions } from "../services/planning.service";
 import { ensureUserByTelegramId } from "../services/user.service";
+import { buildPlanMessage } from "../utils/plan-message";
 import { safeReply } from "../utils/telegram";
 
 const reasonKeyboard = new Keyboard()
@@ -85,6 +87,25 @@ const askIntInRange = async (
   }
 };
 
+const maybeSendMorningPlan = async (ctx: BotContext, user: Awaited<ReturnType<typeof ensureUserByTelegramId>>, isMorning: boolean) => {
+  if (!isMorning) {
+    return;
+  }
+
+  await safeReply(ctx, "Собираю информацию");
+  try {
+    const plan = await runPlanAndStoreSuggestions(user);
+    const message = await buildPlanMessage(user.id, plan);
+    await safeReply(ctx, message);
+  } catch (error: unknown) {
+    console.error("[Mood] auto plan after morning check-in failed", error);
+    await safeReply(
+      ctx,
+      "⚠️ Самочувствие сохранено, но не удалось автоматически построить план. Попробуй /plan."
+    );
+  }
+};
+
 export const textCheckinConversation = async (
   conversation: BotConversation,
   ctx: BotContext,
@@ -118,6 +139,7 @@ export const textCheckinConversation = async (
   });
 
   await ctx.reply("✅ Самочувствие сохранено", { reply_markup: { remove_keyboard: true } });
+  await maybeSendMorningPlan(ctx, user, isMorning);
 };
 
 export const moodPromptCommand = async (ctx: BotContext): Promise<void> => {
@@ -197,6 +219,7 @@ export const voiceMoodMessageHandler = async (ctx: BotContext): Promise<void> =>
       ctx,
       `✅ Сохранено\nЭнергия: ${result.extracted.energy}/5\nФокус: ${result.extracted.focus}/5\nНастроение: ${result.extracted.mood}\nПричина: ${result.extracted.reasonCode}`
     );
+    await maybeSendMorningPlan(ctx, user, pending.isMorning);
   } catch (error: unknown) {
     console.error("[Mood] voice processing failed", error);
     await safeReply(
