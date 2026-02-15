@@ -1,4 +1,6 @@
 import type { Context } from "grammy";
+import { TaskStatus } from "@prisma/client";
+import { prisma } from "../db/prisma";
 import { ensureUserByTelegramId } from "../services/user.service";
 import { getOpenTasksForUser } from "../services/task-sync.service";
 import { formatTasksByProjectMessages } from "../utils/formatter";
@@ -14,7 +16,42 @@ export const tasksCommand = async (ctx: Context): Promise<void> => {
   await safeReply(ctx, "Собираю информацию");
 
   const user = await ensureUserByTelegramId(tgUserId);
+  try {
+    const [openCount, doneCount, deletedCount, lastSync] = await Promise.all([
+      prisma.task.count({ where: { userId: user.id, status: TaskStatus.OPEN } }),
+      prisma.task.count({ where: { userId: user.id, status: TaskStatus.DONE } }),
+      prisma.task.count({ where: { userId: user.id, status: TaskStatus.DELETED } }),
+      prisma.userRule.findUnique({
+        where: { key: `ticktick_last_sync:${user.id}` },
+        select: { value: true },
+      }),
+    ]);
+    console.log(
+      `[Bot] /tasks debug user=${user.id} open=${openCount} done=${doneCount} deleted=${deletedCount}`
+    );
+    if (lastSync?.value) {
+      console.log("[Bot] /tasks last sync meta:", lastSync.value);
+    } else {
+      console.log("[Bot] /tasks last sync meta not found");
+    }
+  } catch (error: unknown) {
+    console.error("[Bot] /tasks debug counters failed", error);
+  }
+
   const tasks = await getOpenTasksForUser(user.id);
+  if (!tasks.length) {
+    console.log(`[Bot] /tasks no active tasks in DB for user=${user.id}`);
+  } else {
+    const preview = tasks.slice(0, 5).map((task) => ({
+      id: task.id,
+      externalId: task.externalId,
+      title: task.title,
+      project: task.projectName,
+      createdAt: task.createdAt.toISOString(),
+    }));
+    console.log("[Bot] /tasks active tasks preview:", preview);
+  }
+
   const taskMessages = formatTasksByProjectMessages(
     tasks.map((task) => ({
       id: task.externalId ?? task.id,

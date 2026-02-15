@@ -36,6 +36,9 @@ export async function runDailyNotifications(): Promise<void> {
   console.log("[CronJob] Daily notification job started");
 
   const nowMoscow = DateTime.now().setZone(MOSCOW_TZ);
+  console.log(
+    `[CronJob] now(msk)=${nowMoscow.toISO()} hhmm=${nowMoscow.toFormat("HH:mm")} weekday=${nowMoscow.weekday}`
+  );
   const bot = createBot();
 
   if (bot) {
@@ -45,16 +48,24 @@ export async function runDailyNotifications(): Promise<void> {
     console.log("[CronJob] Skipping check-in notifications (no BOT_TOKEN)");
   }
 
-  if (isTime(nowMoscow, 0, 5)) {
+  const shouldRecompute = isTime(nowMoscow, 0, 5);
+  console.log(`[CronJob] daily features recompute check: ${shouldRecompute ? "RUN" : "SKIP"}`);
+  if (shouldRecompute) {
     await runDailyFeaturesRecompute();
   }
 
-  if (isMonday(nowMoscow) && isTime(nowMoscow, 11, 0) && bot) {
+  const shouldWeeklyReview = isMonday(nowMoscow) && isTime(nowMoscow, 11, 0);
+  console.log(
+    `[CronJob] weekly review check: ${shouldWeeklyReview ? "RUN" : "SKIP"} (hasBot=${Boolean(bot)})`
+  );
+  if (shouldWeeklyReview && bot) {
     await sendCalendarWeekReviewToAllUsers(bot as any);
     console.log("[CronJob] Weekly calendar reviews processed");
   }
 
-  if (isTime(nowMoscow, 2, 0)) {
+  const shouldNightSync = isTime(nowMoscow, 2, 0);
+  console.log(`[CronJob] night ticktick sync check: ${shouldNightSync ? "RUN" : "SKIP"}`);
+  if (shouldNightSync) {
     const result = await syncFromTickTickToAllUsers();
     if (!result.ok) {
       console.error("[CronJob] Night TickTick sync skipped:", result.authHint);
@@ -67,4 +78,3 @@ export async function runDailyNotifications(): Promise<void> {
 
   console.log("[CronJob] Daily notification job finished");
 }
-
