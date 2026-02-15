@@ -38,6 +38,11 @@ const toTaskCreateData = (
 
 export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[]) => {
   const now = new Date();
+  const startedAt = Date.now();
+  console.log("[TaskSync] syncTickTickTasksToDb started", {
+    userId,
+    incomingTasksCount: tasks.length,
+  });
 
   const projectNameToId = new Map<string, string>();
   const uniqueProjectNames = Array.from(
@@ -61,6 +66,9 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
   }
 
   const touchedTaskIds: string[] = [];
+  let createdCount = 0;
+  let updatedCount = 0;
+  let reopenedCount = 0;
 
   for (const incoming of tasks) {
     const existing = await prisma.task.findFirst({
@@ -83,6 +91,7 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
         select: { id: true },
       });
       touchedTaskIds.push(created.id);
+      createdCount += 1;
       await prisma.taskEvent.create({
         data: {
           userId,
@@ -112,8 +121,10 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
       select: { id: true },
     });
     touchedTaskIds.push(updated.id);
+    updatedCount += 1;
 
     if (existing.status !== TaskStatus.OPEN) {
+      reopenedCount += 1;
       await prisma.taskEvent.create({
         data: {
           userId,
@@ -127,7 +138,7 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     }
   }
 
-  await prisma.task.updateMany({
+  const deletedResult = await prisma.task.updateMany({
     where: {
       userId,
       source: TaskSource.TICKTICK,
@@ -150,6 +161,19 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
       })),
     });
   }
+
+  console.log("[TaskSync] syncTickTickTasksToDb finished", {
+    userId,
+    incomingTasksCount: tasks.length,
+    uniqueProjectNamesCount: uniqueProjectNames.length,
+    projectsMappedCount: projectNameToId.size,
+    createdCount,
+    updatedCount,
+    reopenedCount,
+    deletedCount: deletedResult.count,
+    touchedCount: touchedTaskIds.length,
+    elapsedMs: Date.now() - startedAt,
+  });
 };
 
 export const getOpenTasksForUser = async (userId: string) => {

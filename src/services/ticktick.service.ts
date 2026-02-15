@@ -56,6 +56,12 @@ interface SyncBatchResponse {
 let cachedSyncToken: string | null = null;
 let cachedSyncTokenExpiresAt = 0;
 
+const mask = (value: string): string => {
+  if (!value) return "";
+  if (value.length <= 8) return "****";
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+};
+
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -120,8 +126,19 @@ const getSyncHeaders = (): Record<string, string> => ({
 });
 
 const getSyncToken = async (): Promise<string | null> => {
+  console.log("[TickTick] getSyncToken started", {
+    baseUrl: TICKTICK_SYNC_BASE_URL,
+    hasStaticSyncToken: Boolean(process.env.TICKTICK_SYNC_TOKEN?.trim()),
+    hasUsername: Boolean(process.env.TICKTICK_SYNC_USERNAME?.trim()),
+    hasPassword: Boolean(process.env.TICKTICK_SYNC_PASSWORD?.trim()),
+  });
+
   const now = Date.now();
   if (cachedSyncToken && now < cachedSyncTokenExpiresAt - TOKEN_EXPIRY_SAFETY_MS) {
+    console.log("[TickTick] Using cached sync token", {
+      token: mask(cachedSyncToken),
+      expiresAt: new Date(cachedSyncTokenExpiresAt).toISOString(),
+    });
     return cachedSyncToken;
   }
 
@@ -129,6 +146,10 @@ const getSyncToken = async (): Promise<string | null> => {
   if (staticToken) {
     cachedSyncToken = staticToken;
     cachedSyncTokenExpiresAt = Date.now() + 6 * 60 * 60 * 1000;
+    console.log("[TickTick] Using static sync token from env", {
+      token: mask(staticToken),
+      expiresAt: new Date(cachedSyncTokenExpiresAt).toISOString(),
+    });
     return staticToken;
   }
 
@@ -143,8 +164,12 @@ const getSyncToken = async (): Promise<string | null> => {
   }
 
   try {
-    console.log("[TickTick] Sync API sign-on...");
+    console.log("[TickTick] Sync API sign-on...", {
+      signOnUrl: TICKTICK_SYNC_SIGNON_URL,
+      username: mask(username),
+    });
 
+    const startedAt = Date.now();
     const response = await withNetworkRetry("sync sign-on", () =>
       axios.post<SyncSignOnResponse>(
         TICKTICK_SYNC_SIGNON_URL,
@@ -167,6 +192,12 @@ const getSyncToken = async (): Promise<string | null> => {
 
     cachedSyncToken = token;
     cachedSyncTokenExpiresAt = Date.now() + 12 * 60 * 60 * 1000;
+    console.log("[TickTick] Sync sign-on success", {
+      token: mask(token),
+      elapsedMs: Date.now() - startedAt,
+      expiresAt: new Date(cachedSyncTokenExpiresAt).toISOString(),
+      inboxId: response.data.inboxId ?? null,
+    });
     return token;
   } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
@@ -214,6 +245,7 @@ const normalizeTask = (task: SyncTask, projectNameById: Map<string, string>): Ti
 };
 
 export const getActiveTasks = async (): Promise<TickTickTask[]> => {
+  const startedAt = Date.now();
   const syncToken = await getSyncToken();
   if (!syncToken) {
     console.error("[TickTick] Cannot fetch tasks without Sync API token");
@@ -221,7 +253,10 @@ export const getActiveTasks = async (): Promise<TickTickTask[]> => {
   }
 
   try {
-    console.log("[TickTick] Fetching tasks from Sync API /batch/check/0 ...");
+    console.log("[TickTick] Fetching tasks from Sync API /batch/check/0 ...", {
+      batchUrl: TICKTICK_SYNC_BATCH_URL,
+      token: mask(syncToken),
+    });
 
     const batchResponse = await withNetworkRetry("fetch sync batch", () =>
       axios.get<SyncBatchResponse>(TICKTICK_SYNC_BATCH_URL, {
@@ -234,15 +269,44 @@ export const getActiveTasks = async (): Promise<TickTickTask[]> => {
     );
 
     const batchData = batchResponse.data;
-    const projectNameById = buildProjectNameMap(batchData);
+    const profiles = Array.isArray(batchData.projectProfiles) ? batchData.projectProfiles : [];
     const rawTasks = Array.isArray(batchData.syncTaskBean?.update) ? batchData.syncTaskBean?.update : [];
+    const rawMissingId = rawTasks.filter((task) => !task.id).length;
+    const rawMissingTitle = rawTasks.filter((task) => !task.title).length;
+    const rawDone = rawTasks.filter((task) => task.status === 2).length;
 
+    console.log("[TickTick] Sync batch raw stats", {
+      status: batchResponse.status,
+      inboxId: batchData.inboxId ?? null,
+      projectProfilesCount: profiles.length,
+      openProfilesCount: profiles.filter((p) => !p.closed).length,
+      rawTasksCount: rawTasks.length,
+      rawDoneCount: rawDone,
+      rawMissingId,
+      rawMissingTitle,
+    });
+
+    const projectNameById = buildProjectNameMap(batchData);
     const tasks = rawTasks
       .map((task) => normalizeTask(task, projectNameById))
       .filter((task): task is TickTickTask => task !== null)
       .filter((task) => task.status !== 2);
 
-    console.log(`[TickTick] Loaded ${tasks.length} active tasks from Sync API`);
+    const missingProjectName = tasks.filter((task) => !task.projectName).length;
+    const withoutDueDate = tasks.filter((task) => !task.dueDate).length;
+    console.log("[TickTick] Loaded active tasks from Sync API", {
+      activeTasksCount: tasks.length,
+      missingProjectName,
+      withoutDueDate,
+      elapsedMs: Date.now() - startedAt,
+      sample: tasks.slice(0, 5).map((task) => ({
+        id: task.id,
+        title: task.title,
+        projectId: task.projectId,
+        projectName: task.projectName,
+        status: task.status,
+      })),
+    });
     return tasks;
   } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
