@@ -38,12 +38,24 @@ import { tasksCommand } from "./commands/tasks";
 import { startCronJobs } from "./cron/jobs";
 
 const token = process.env.BOT_TOKEN;
+const allowedTgUserId = process.env.ALLOWED_TG_USER_ID?.trim() || "841208806";
 
 if (!token) {
   throw new Error("Missing BOT_TOKEN environment variable");
 }
 
 const bot = new Bot(token);
+
+bot.use(async (ctx, next) => {
+  const fromId = ctx.from?.id ? String(ctx.from.id) : null;
+  if (fromId && fromId !== allowedTgUserId) {
+    if (ctx.callbackQuery) {
+      await ctx.answerCallbackQuery({ text: "Доступ ограничен" });
+    }
+    return;
+  }
+  await next();
+});
 
 bot.use(conversations() as any);
 bot.use(textCheckinConversationMiddleware as any);
