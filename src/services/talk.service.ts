@@ -45,6 +45,7 @@ interface NewsArticle {
   url: string;
   source: string;
   publishedAt: string | null;
+  region: "WORLD" | "RUSSIA";
 }
 
 export interface TalkTopicSummary {
@@ -97,7 +98,7 @@ const extractXmlTag = (block: string, tag: string): string | null => {
   return decodeXmlEntities(stripCdata(match[1]).trim());
 };
 
-const parseGoogleNewsRss = (xml: string): NewsArticle[] => {
+const parseGoogleNewsRss = (xml: string, region: "WORLD" | "RUSSIA"): NewsArticle[] => {
   const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
   const items: NewsArticle[] = [];
   let match: RegExpExecArray | null = null;
@@ -117,34 +118,46 @@ const parseGoogleNewsRss = (xml: string): NewsArticle[] => {
       url: url.trim(),
       source: normalizeWhitespace(source),
       publishedAt: publishedAt ? normalizeWhitespace(publishedAt) : null,
+      region,
     });
   }
 
   return items;
 };
 
-const fetchLatestNewsByTopic = async (topic: string): Promise<NewsArticle[]> => {
+const fetchGoogleNewsByRegion = async (
+  topic: string,
+  region: "WORLD" | "RUSSIA"
+): Promise<NewsArticle[]> => {
+  const params =
+    region === "RUSSIA"
+      ? { q: topic, hl: "ru", gl: "RU", ceid: "RU:ru" }
+      : { q: topic, hl: "en", gl: "US", ceid: "US:en" };
+
   try {
     const response = await axios.get<string>(GOOGLE_NEWS_RSS_URL, {
-      params: {
-        q: topic,
-        hl: "ru",
-        gl: "RU",
-        ceid: "RU:ru",
-      },
+      params,
       responseType: "text",
       timeout: 15000,
     });
 
-    const articles = parseGoogleNewsRss(response.data);
+    const articles = parseGoogleNewsRss(response.data, region);
     if (!articles.length) {
-      console.warn("[Talk] No news parsed from RSS", { topic });
+      console.warn("[Talk] No news parsed from RSS", { topic, region });
     }
     return articles;
   } catch (error: unknown) {
-    console.error("[Talk] Failed to fetch latest news", { topic, error });
+    console.error("[Talk] Failed to fetch latest news", { topic, region, error });
     return [];
   }
+};
+
+const fetchLatestNewsByTopic = async (topic: string): Promise<NewsArticle[]> => {
+  const [worldNews, russiaNews] = await Promise.all([
+    fetchGoogleNewsByRegion(topic, "WORLD"),
+    fetchGoogleNewsByRegion(topic, "RUSSIA"),
+  ]);
+  return [...worldNews, ...russiaNews];
 };
 
 const containsTalkMarker = (text: string): boolean => {
@@ -252,17 +265,49 @@ const getCometKey = (): string | null => {
 };
 
 const buildFallbackSummary = (topic: string, tasks: TalkTask[], news: NewsArticle[]): string => {
+  const world = news.find((item) => item.region === "WORLD");
+  const russia = news.find((item) => item.region === "RUSSIA");
+  const worldBrief = world?.title ?? "Нет подтвержденной релевантной новости.";
+  const worldLink = world?.url ?? "нет";
+  const russiaBrief = russia?.title ?? "Нет подтвержденной релевантной новости.";
+  const russiaLink = russia?.url ?? "нет";
+
   if (news.length > 0) {
-    const top = news.slice(0, 2).map((item) => item.title).join("; ");
     return truncate(
-      `По теме "${topic}" найдены свежие новости (${news.length}): ${top}. Проверь источники ниже.`,
+      [
+        `Тема: ${topic}`,
+        "",
+        "Кратко: Найдены новости по теме, проверь ключевые обновления в блоках ниже.",
+        "",
+        "Последние новости по две ссылки:",
+        "В Мире:",
+        worldBrief,
+        `Ссылка: ${worldLink}`,
+        "",
+        "В России:",
+        russiaBrief,
+        `Ссылка: ${russiaLink}`,
+      ].join("\n"),
       TALK_SUMMARY_LIMIT
     );
   }
 
   const sample = tasks.slice(0, 3).map((task) => task.title).join("; ");
   return truncate(
-    `По теме "${topic}" не удалось получить свежие новости. Контекст из задач: ${sample || "без деталей"}.`,
+    [
+      `Тема: ${topic}`,
+      "",
+      `Кратко: По теме не удалось получить свежие новости. Контекст из задач: ${sample || "без деталей"}.`,
+      "",
+      "Последние новости по две ссылки:",
+      "В Мире:",
+      "Нет подтвержденной релевантной новости.",
+      "Ссылка: нет",
+      "",
+      "В России:",
+      "Нет подтвержденной релевантной новости.",
+      "Ссылка: нет",
+    ].join("\n"),
     TALK_SUMMARY_LIMIT
   );
 };
@@ -289,8 +334,27 @@ const summarizeTalkTopicWithLlm = async (
     project: task.projectName ?? "Без проекта",
     note: task.note ? truncate(normalizeWhitespace(task.note), 180) : null,
   }));
+  const inputWorldNews = news
+    .filter((item) => item.region === "WORLD")
+    .map((item, index) => ({
+      n: index + 1,
+      title: item.title,
+      source: item.source,
+      publishedAt: item.publishedAt,
+      url: item.url,
+    }));
+  const inputRussiaNews = news
+    .filter((item) => item.region === "RUSSIA")
+    .map((item, index) => ({
+      n: index + 1,
+      title: item.title,
+      source: item.source,
+      publishedAt: item.publishedAt,
+      url: item.url,
+    }));
   const inputNews = news.map((item, index) => ({
     n: index + 1,
+    region: item.region,
     title: item.title,
     source: item.source,
     publishedAt: item.publishedAt,
@@ -301,9 +365,24 @@ const summarizeTalkTopicWithLlm = async (
   const userPrompt = JSON.stringify({
     topic,
     newsCount: news.length,
-    news: inputNews,
+    worldNews: inputWorldNews,
+    russiaNews: inputRussiaNews,
+    allNews: inputNews,
     relatedTasks: inputTasks,
-    format: "3-5 коротких предложений: что произошло, почему важно, что мониторить дальше.",
+    format: [
+      "Тема: <уточненная тема>",
+      "",
+      "Кратко: <один короткий абзац>",
+      "",
+      "Последние новости по две ссылки:",
+      "В Мире:",
+      "<кратко>",
+      "Ссылка: <url>",
+      "",
+      "В России:",
+      "<кратко>",
+      "Ссылка: <url>",
+    ].join("\n"),
   });
 
   try {
@@ -403,29 +482,11 @@ export const formatTalkSummaryMessage = (
   index: number,
   total: number
 ): string => {
-  const taskLines = item.tasks.slice(0, 5).map((task) => {
-    const project = task.projectName ? ` (${task.projectName})` : "";
-    return `- ${task.title}${project}`;
-  });
-  const moreLine = item.tasks.length > 5 ? [`- ...еще ${item.tasks.length - 5}`] : [];
-  const sourceLines =
-    item.news.length > 0
-      ? item.news.map((article, articleIndex) => `${articleIndex + 1}. ${article.source}: ${article.url}`)
-      : ["Нет свежих новостей по этой теме."];
-  const body = [
-    `Тема ${index + 1}/${total}: ${item.topic}`,
-    "",
-    item.summary,
-    "",
-    "Источники:",
-    ...sourceLines,
-    "",
-    "Связанные задачи:",
-    ...taskLines,
-    ...moreLine,
-  ].join("\n");
-
-  return truncate(body, TELEGRAM_MESSAGE_LIMIT);
+  const normalized = item.summary.trim();
+  if (normalized.length <= TELEGRAM_MESSAGE_LIMIT) {
+    return normalized;
+  }
+  return truncate(normalized, TELEGRAM_MESSAGE_LIMIT);
 };
 
 const uniqueClosableTaskRefs = (
