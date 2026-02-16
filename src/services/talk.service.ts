@@ -1,14 +1,17 @@
 import axios from "axios";
 import { Prisma, TaskSource, TaskStatus } from "@prisma/client";
 import type { Bot } from "grammy";
+import { LLM_PROMPTS } from "../config/llm-prompts";
 import { prisma } from "../db/prisma";
-import { completeTask } from "./ticktick.service";
+import { completeTask, getActiveTasks } from "./ticktick.service";
 
 const COMET_API_URL = "https://api.cometapi.com/v1/chat/completions";
+const GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search";
 const TALK_AUTO_SENT_RULE_PREFIX = "talk_auto_sent:";
 const DEFAULT_TALK_MODEL = "gemini-2.5-flash";
 const TALK_SUMMARY_LIMIT = 900;
 const TELEGRAM_MESSAGE_LIMIT = 3900;
+const TALK_NEWS_LIMIT = 5;
 
 const TALK_PHRASE_MARKERS = ["/talk", "/толк", "slash talk", "слеш толк"];
 const TALK_WORD_PATTERN = /(^|[^\p{L}\p{N}_])(talk|толк)(?=$|[^\p{L}\p{N}_])/iu;
@@ -37,9 +40,17 @@ interface TalkTopicBucket {
   tasks: TalkTask[];
 }
 
+interface NewsArticle {
+  title: string;
+  url: string;
+  source: string;
+  publishedAt: string | null;
+}
+
 export interface TalkTopicSummary {
   topic: string;
   summary: string;
+  news: NewsArticle[];
   taskRefs: Array<{
     id: string;
     source: TaskSource;
@@ -65,6 +76,76 @@ const normalizeWhitespace = (text: string): string => text.replace(/\s+/g, " ").
 
 const truncate = (text: string, limit: number): string =>
   text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+
+const stripCdata = (value: string): string => value.replace(/^<!\[CDATA\[/, "").replace(/\]\]>$/, "");
+
+const decodeXmlEntities = (value: string): string =>
+  value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x2F;/gi, "/");
+
+const extractXmlTag = (block: string, tag: string): string | null => {
+  const regex = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, "i");
+  const match = block.match(regex);
+  if (!match?.[1]) {
+    return null;
+  }
+  return decodeXmlEntities(stripCdata(match[1]).trim());
+};
+
+const parseGoogleNewsRss = (xml: string): NewsArticle[] => {
+  const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+  const items: NewsArticle[] = [];
+  let match: RegExpExecArray | null = null;
+
+  while ((match = itemRegex.exec(xml)) !== null && items.length < TALK_NEWS_LIMIT) {
+    const block = match[1];
+    const title = extractXmlTag(block, "title");
+    const url = extractXmlTag(block, "link");
+    if (!title || !url) {
+      continue;
+    }
+
+    const source = extractXmlTag(block, "source") ?? "Источник";
+    const publishedAt = extractXmlTag(block, "pubDate");
+    items.push({
+      title: truncate(normalizeWhitespace(title), 180),
+      url: url.trim(),
+      source: normalizeWhitespace(source),
+      publishedAt: publishedAt ? normalizeWhitespace(publishedAt) : null,
+    });
+  }
+
+  return items;
+};
+
+const fetchLatestNewsByTopic = async (topic: string): Promise<NewsArticle[]> => {
+  try {
+    const response = await axios.get<string>(GOOGLE_NEWS_RSS_URL, {
+      params: {
+        q: topic,
+        hl: "ru",
+        gl: "RU",
+        ceid: "RU:ru",
+      },
+      responseType: "text",
+      timeout: 15000,
+    });
+
+    const articles = parseGoogleNewsRss(response.data);
+    if (!articles.length) {
+      console.warn("[Talk] No news parsed from RSS", { topic });
+    }
+    return articles;
+  } catch (error: unknown) {
+    console.error("[Talk] Failed to fetch latest news", { topic, error });
+    return [];
+  }
+};
 
 const containsTalkMarker = (text: string): boolean => {
   const lower = text.toLowerCase();
@@ -170,40 +251,59 @@ const getCometKey = (): string | null => {
   return key?.trim() || null;
 };
 
-const buildFallbackSummary = (topic: string, tasks: TalkTask[]): string => {
-  const sample = tasks
-    .slice(0, 3)
-    .map((task) => task.title)
-    .join("; ");
+const buildFallbackSummary = (topic: string, tasks: TalkTask[], news: NewsArticle[]): string => {
+  if (news.length > 0) {
+    const top = news.slice(0, 2).map((item) => item.title).join("; ");
+    return truncate(
+      `По теме "${topic}" найдены свежие новости (${news.length}): ${top}. Проверь источники ниже.`,
+      TALK_SUMMARY_LIMIT
+    );
+  }
+
+  const sample = tasks.slice(0, 3).map((task) => task.title).join("; ");
   return truncate(
-    `Тема "${topic}". Найдено задач: ${tasks.length}. Основные пункты: ${sample || "без деталей"}.`,
+    `По теме "${topic}" не удалось получить свежие новости. Контекст из задач: ${sample || "без деталей"}.`,
     TALK_SUMMARY_LIMIT
   );
 };
 
-const summarizeTalkTopicWithLlm = async (topic: string, tasks: TalkTask[]): Promise<string> => {
+const summarizeTalkTopicWithLlm = async (
+  topic: string,
+  tasks: TalkTask[],
+  news: NewsArticle[]
+): Promise<string> => {
+  if (!news.length) {
+    return buildFallbackSummary(topic, tasks, news);
+  }
+
   const apiKey = getCometKey();
   if (!apiKey) {
     console.error("[Talk] Missing COMET_API_KEY/COMETAPI_API_KEY. Using fallback summary.");
-    return buildFallbackSummary(topic, tasks);
+    return buildFallbackSummary(topic, tasks, news);
   }
 
   const model = getTalkModel();
-  const inputTasks = tasks.slice(0, 10).map((task, index) => ({
+  const inputTasks = tasks.slice(0, 5).map((task, index) => ({
     n: index + 1,
     title: task.title,
     project: task.projectName ?? "Без проекта",
-    dueAt: task.dueAt ? task.dueAt.toISOString() : null,
-    note: task.note ? truncate(normalizeWhitespace(task.note), 300) : null,
+    note: task.note ? truncate(normalizeWhitespace(task.note), 180) : null,
+  }));
+  const inputNews = news.map((item, index) => ({
+    n: index + 1,
+    title: item.title,
+    source: item.source,
+    publishedAt: item.publishedAt,
+    url: item.url,
   }));
 
-  const systemPrompt =
-    "Ты аналитик задач. Дай краткую сводку по теме на русском, plain text, 3-5 предложений, без markdown.";
+  const systemPrompt = LLM_PROMPTS.talkNewsSummaryRu;
   const userPrompt = JSON.stringify({
     topic,
-    taskCount: tasks.length,
-    tasks: inputTasks,
-    format: "Короткая сводка: что главное, риски, ближайший шаг.",
+    newsCount: news.length,
+    news: inputNews,
+    relatedTasks: inputTasks,
+    format: "3-5 коротких предложений: что произошло, почему важно, что мониторить дальше.",
   });
 
   try {
@@ -229,7 +329,7 @@ const summarizeTalkTopicWithLlm = async (topic: string, tasks: TalkTask[]): Prom
     const summary = response.data.choices?.[0]?.message?.content?.trim();
     if (!summary) {
       console.error("[Talk] Empty LLM summary. Using fallback.", { topic, taskCount: tasks.length });
-      return buildFallbackSummary(topic, tasks);
+      return buildFallbackSummary(topic, tasks, news);
     }
 
     return truncate(summary, TALK_SUMMARY_LIMIT);
@@ -239,7 +339,7 @@ const summarizeTalkTopicWithLlm = async (topic: string, tasks: TalkTask[]): Prom
       taskCount: tasks.length,
       error,
     });
-    return buildFallbackSummary(topic, tasks);
+    return buildFallbackSummary(topic, tasks, news);
   }
 };
 
@@ -274,10 +374,12 @@ export const buildTalkTopicSummariesForUser = async (userId: string): Promise<Ta
   const grouped = groupTalkTasksByTopic(candidates);
   const summaries: TalkTopicSummary[] = [];
   for (const bucket of grouped) {
-    const summary = await summarizeTalkTopicWithLlm(bucket.topic, bucket.tasks);
+    const news = await fetchLatestNewsByTopic(bucket.topic);
+    const summary = await summarizeTalkTopicWithLlm(bucket.topic, bucket.tasks, news);
     summaries.push({
       topic: bucket.topic,
       summary,
+      news,
       taskRefs: bucket.tasks.map((task) => ({
         id: task.id,
         source: task.source,
@@ -306,10 +408,17 @@ export const formatTalkSummaryMessage = (
     return `- ${task.title}${project}`;
   });
   const moreLine = item.tasks.length > 5 ? [`- ...еще ${item.tasks.length - 5}`] : [];
+  const sourceLines =
+    item.news.length > 0
+      ? item.news.map((article, articleIndex) => `${articleIndex + 1}. ${article.source}: ${article.url}`)
+      : ["Нет свежих новостей по этой теме."];
   const body = [
     `Тема ${index + 1}/${total}: ${item.topic}`,
     "",
     item.summary,
+    "",
+    "Источники:",
+    ...sourceLines,
     "",
     "Связанные задачи:",
     ...taskLines,
@@ -321,22 +430,21 @@ export const formatTalkSummaryMessage = (
 
 const uniqueClosableTaskRefs = (
   refs: TalkTopicSummary["taskRefs"]
-): Array<{ externalId: string; projectId: string; title: string }> => {
+): Array<{ externalId: string; title: string }> => {
   const seen = new Set<string>();
-  const result: Array<{ externalId: string; projectId: string; title: string }> = [];
+  const result: Array<{ externalId: string; title: string }> = [];
 
   for (const ref of refs) {
-    if (ref.source !== TaskSource.TICKTICK || !ref.externalId || !ref.projectId) {
+    if (ref.source !== TaskSource.TICKTICK || !ref.externalId) {
       continue;
     }
-    const key = `${ref.projectId}:${ref.externalId}`;
+    const key = ref.externalId;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     result.push({
       externalId: ref.externalId,
-      projectId: ref.projectId,
       title: ref.title,
     });
   }
@@ -408,10 +516,28 @@ export const closeTalkTopicTasksAfterSummary = async (
 
   let closed = 0;
   let failed = 0;
+  const activeTasks = await getActiveTasks();
+  const ticktickProjectByTaskId = new Map<string, string>();
+  for (const task of activeTasks) {
+    if (task.id && task.projectId) {
+      ticktickProjectByTaskId.set(task.id, task.projectId);
+    }
+  }
 
   for (const task of closable) {
+    const ticktickProjectId = ticktickProjectByTaskId.get(task.externalId);
+    if (!ticktickProjectId) {
+      failed += 1;
+      console.error("[Talk] Failed to resolve TickTick projectId for task", {
+        userId,
+        taskId: task.externalId,
+        title: task.title,
+      });
+      continue;
+    }
+
     const result = await completeTask({
-      projectId: task.projectId,
+      projectId: ticktickProjectId,
       taskId: task.externalId,
     });
 
@@ -420,7 +546,7 @@ export const closeTalkTopicTasksAfterSummary = async (
       console.error("[Talk] Failed to close TickTick task after summary", {
         userId,
         taskId: task.externalId,
-        projectId: task.projectId,
+        projectId: ticktickProjectId,
         title: task.title,
         message: result.message ?? null,
       });

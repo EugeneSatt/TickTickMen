@@ -279,6 +279,8 @@ export const LLM_PROMPTS = {
     "Ты ассистент продуктивности. Дай короткую сводку на русском до 1200 символов, plain text.",
   weeklySummaryRu:
     "Ты ассистент продуктивности. Дай недельную сводку на русском до 2500 символов, plain text.",
+  talkNewsSummaryRu:
+    "Ты новостной аналитик. Дай краткую сводку на русском по последним новостям темы из переданного списка источников. Используй только факты из списка, без выдуманных данных и ссылок. Формат: plain text, 3-5 предложений.",
   moodExtractionJson:
     "Extract daily check-in values from Russian text. Return ONLY JSON with keys: energy (1..5), focus (1..5), mood (-2..2), reasonCode (NO_CLARITY|BIG_TASK|FEAR_CONSEQUENCES|SLEEP|FATIGUE|SOCIAL_ANXIETY|CONTEXT_SWITCH|OVERLOAD|OTHER), note (short string).",
 } as const;
