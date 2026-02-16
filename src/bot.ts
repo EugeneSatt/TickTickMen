@@ -35,6 +35,7 @@ import { startCommand } from "./commands/start";
 import { taskDoneCallbackHandler, taskDoneCommand } from "./commands/task-done";
 import { taskProjectCommand } from "./commands/task-project";
 import { tasksCommand } from "./commands/tasks";
+import { talkCommand } from "./commands/talk";
 
 const token = process.env.BOT_TOKEN;
 const allowedTgUserId = process.env.ALLOWED_TG_USER_ID?.trim() || "841208806";
@@ -63,6 +64,7 @@ bot.use(createConversation(projectReviewConversation as any) as any);
 
 bot.command("start", startCommand);
 bot.command("tasks", tasksCommand);
+bot.command("talk", talkCommand);
 bot.command("plan", planCommand);
 bot.command("apply_categories", applyCategoriesCommand);
 bot.command("review", reviewCommand);

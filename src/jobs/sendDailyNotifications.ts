@@ -6,6 +6,7 @@ import { sendScheduledCheckinPrompts } from "../services/emotion.service";
 import { recomputeDailyFeatures } from "../services/features.service";
 import { sendCalendarWeekReviewToAllUsers } from "../services/planning.service";
 import { syncFromTickTickToAllUsers } from "../services/sync-orchestrator.service";
+import { sendAutoTalkSummariesToAllUsers } from "../services/talk.service";
 import { CRON_WINDOW_MINUTES, isWithinCronWindow } from "../utils/cron-time-window";
 
 const MOSCOW_TZ = "Europe/Moscow";
@@ -16,6 +17,15 @@ const createBot = (): Bot | null => {
   const token = process.env.BOT_TOKEN?.trim();
   if (!token) {
     console.error("[CronJob] Missing BOT_TOKEN");
+    return null;
+  }
+  return new Bot(token);
+};
+
+const createTalkBot = (): Bot | null => {
+  const token = process.env.BOT_TOKEN_TALK?.trim();
+  if (!token) {
+    console.error("[CronJob] Missing BOT_TOKEN_TALK");
     return null;
   }
   return new Bot(token);
@@ -59,6 +69,17 @@ export async function runDailyNotifications(): Promise<void> {
   if (shouldWeeklyReview && bot) {
     await sendCalendarWeekReviewToAllUsers(bot as any);
     console.log("[CronJob] Weekly calendar reviews processed");
+  }
+
+  const shouldTalkDigest = isWithinCronWindow(nowMoscow, 18, 0);
+  const talkBot = shouldTalkDigest ? createTalkBot() : null;
+  console.log(`[CronJob] talk digest check: ${shouldTalkDigest ? "RUN" : "SKIP"} (hasTalkBot=${Boolean(talkBot)})`);
+  if (shouldTalkDigest && talkBot) {
+    const dayKey = nowMoscow.toFormat("yyyy-LL-dd");
+    const result = await sendAutoTalkSummariesToAllUsers(talkBot as any, dayKey);
+    console.log(
+      `[CronJob] Talk digest processed: sent=${result.sentUsers} skipped=${result.skippedUsers} failed=${result.failedUsers}`
+    );
   }
 
   const shouldNightSync = isWithinCronWindow(nowMoscow, 2, 0);
