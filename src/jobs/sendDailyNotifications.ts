@@ -6,11 +6,9 @@ import { sendScheduledCheckinPrompts } from "../services/emotion.service";
 import { recomputeDailyFeatures } from "../services/features.service";
 import { sendCalendarWeekReviewToAllUsers } from "../services/planning.service";
 import { syncFromTickTickToAllUsers } from "../services/sync-orchestrator.service";
+import { CRON_WINDOW_MINUTES, isWithinCronWindow } from "../utils/cron-time-window";
 
 const MOSCOW_TZ = "Europe/Moscow";
-
-const isTime = (now: DateTime, hh: number, mm: number): boolean =>
-  now.hour === hh && now.minute === mm;
 
 const isMonday = (now: DateTime): boolean => now.weekday === 1;
 
@@ -37,7 +35,7 @@ export async function runDailyNotifications(): Promise<void> {
 
   const nowMoscow = DateTime.now().setZone(MOSCOW_TZ);
   console.log(
-    `[CronJob] now(msk)=${nowMoscow.toISO()} hhmm=${nowMoscow.toFormat("HH:mm")} weekday=${nowMoscow.weekday}`
+    `[CronJob] now(msk)=${nowMoscow.toISO()} hhmm=${nowMoscow.toFormat("HH:mm")} weekday=${nowMoscow.weekday} window=${CRON_WINDOW_MINUTES}m`
   );
   const bot = createBot();
 
@@ -48,13 +46,13 @@ export async function runDailyNotifications(): Promise<void> {
     console.log("[CronJob] Skipping check-in notifications (no BOT_TOKEN)");
   }
 
-  const shouldRecompute = isTime(nowMoscow, 0, 5);
+  const shouldRecompute = isWithinCronWindow(nowMoscow, 0, 5);
   console.log(`[CronJob] daily features recompute check: ${shouldRecompute ? "RUN" : "SKIP"}`);
   if (shouldRecompute) {
     await runDailyFeaturesRecompute();
   }
 
-  const shouldWeeklyReview = isMonday(nowMoscow) && isTime(nowMoscow, 11, 0);
+  const shouldWeeklyReview = isMonday(nowMoscow) && isWithinCronWindow(nowMoscow, 11, 0);
   console.log(
     `[CronJob] weekly review check: ${shouldWeeklyReview ? "RUN" : "SKIP"} (hasBot=${Boolean(bot)})`
   );
@@ -63,7 +61,7 @@ export async function runDailyNotifications(): Promise<void> {
     console.log("[CronJob] Weekly calendar reviews processed");
   }
 
-  const shouldNightSync = isTime(nowMoscow, 2, 0);
+  const shouldNightSync = isWithinCronWindow(nowMoscow, 2, 0);
   console.log(`[CronJob] night ticktick sync check: ${shouldNightSync ? "RUN" : "SKIP"}`);
   if (shouldNightSync) {
     const result = await syncFromTickTickToAllUsers();

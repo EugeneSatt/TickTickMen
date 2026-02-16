@@ -3,6 +3,7 @@ import { TaskStatus } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { ensureUserByTelegramId } from "../services/user.service";
 import { getOpenTasksForUser } from "../services/task-sync.service";
+import { syncFromTickTickToDb } from "../services/sync-orchestrator.service";
 import { formatTasksByProjectMessages } from "../utils/formatter";
 import { safeReply } from "../utils/telegram";
 
@@ -16,6 +17,21 @@ export const tasksCommand = async (ctx: Context): Promise<void> => {
   await safeReply(ctx, "Собираю информацию");
 
   const user = await ensureUserByTelegramId(tgUserId);
+  const syncResult = await syncFromTickTickToDb(user.id);
+  if (!syncResult.ok) {
+    console.error("[Bot] /tasks sync failed", {
+      userId: user.id,
+      authHint: syncResult.authHint,
+    });
+    await safeReply(
+      ctx,
+      `Не удалось синхронизировать задачи из TickTick.\n${syncResult.authHint ?? "Проверьте настройки TickTick API."}`
+    );
+    return;
+  }
+
+  console.log(`[Bot] /tasks sync success user=${user.id} tasksCount=${syncResult.tasksCount}`);
+
   try {
     const [openCount, doneCount, deletedCount, lastSync] = await Promise.all([
       prisma.task.count({ where: { userId: user.id, status: TaskStatus.OPEN } }),

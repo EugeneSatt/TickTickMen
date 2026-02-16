@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import { MoodLevel, ReasonCode, type PrismaClient } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { LLM_PROMPTS, SYSTEM_PROMPTS } from "../config/llm-prompts";
+import { isWithinCronWindow } from "../utils/cron-time-window";
 
 const COMET_API_BASE = "https://api.cometapi.com/v1";
 const VOICE_PENDING_RULE_PREFIX = "voice_checkin_pending:";
@@ -300,9 +301,8 @@ export const sendScheduledCheckinPrompts = async (bot: Bot<any>) => {
 
   for (const user of users) {
     const now = DateTime.now().setZone(user.timezone);
-    const hhmm = now.toFormat("HH:mm");
-    const isMorning = hhmm === "08:30";
-    const isEvening = hhmm === "22:00";
+    const isMorning = isWithinCronWindow(now, 8, 30);
+    const isEvening = isWithinCronWindow(now, 22, 0);
 
     if (!isMorning && !isEvening) {
       continue;
