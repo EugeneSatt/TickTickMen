@@ -9,6 +9,7 @@ import {
   voiceMoodMessageHandler,
 } from "./commands/mood";
 import { planCommand } from "./commands/plan";
+import { pomodoroStopCallbackHandler } from "./commands/pomodoro";
 import { projectFocusCallbackHandler, projectFocusCommand } from "./commands/project-focus";
 import { projectHelpCommand } from "./commands/project-help";
 import { projectListCommand } from "./commands/project-list";
@@ -82,6 +83,7 @@ bot.command("project_help", projectHelpCommand as any);
 bot.command("task_project", taskProjectCommand as any);
 bot.command("task_done", taskDoneCommand as any);
 bot.callbackQuery(/^mood:/, moodCallbackHandler as any);
+bot.callbackQuery(/^pomodoro:stop$/, pomodoroStopCallbackHandler as any);
 bot.callbackQuery(/^project_update:/, projectUpdateCallbackHandler as any);
 bot.callbackQuery(/^project_focus:set:/, projectFocusCallbackHandler as any);
 bot.callbackQuery(/^project_note:set:/, projectNoteCallbackHandler as any);

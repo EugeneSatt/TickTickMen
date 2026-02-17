@@ -4,6 +4,7 @@ import { DateTime } from "luxon";
 import { prisma } from "../db/prisma";
 import { sendScheduledCheckinPrompts } from "../services/emotion.service";
 import { recomputeDailyFeatures } from "../services/features.service";
+import { processPomodoroPromptsForAllUsers } from "../services/pomodoro.service";
 import { sendCalendarWeekReviewToAllUsers } from "../services/planning.service";
 import { syncFromTickTickToAllUsers } from "../services/sync-orchestrator.service";
 import { sendAutoTalkSummariesToAllUsers } from "../services/talk.service";
@@ -52,6 +53,8 @@ export async function runDailyNotifications(): Promise<void> {
   if (bot) {
     await sendScheduledCheckinPrompts(bot as any);
     console.log("[CronJob] Check-in notifications processed");
+    await processPomodoroPromptsForAllUsers(bot as any);
+    console.log("[CronJob] Pomodoro prompts processed");
   } else {
     console.log("[CronJob] Skipping check-in notifications (no BOT_TOKEN)");
   }
