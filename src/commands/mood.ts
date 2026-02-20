@@ -8,6 +8,7 @@ import {
   setVoiceCheckinPending,
 } from "../services/emotion.service";
 import { runPlanAndStoreSuggestions } from "../services/planning.service";
+import { syncFromTickTickToDb } from "../services/sync-orchestrator.service";
 import { ensureUserByTelegramId } from "../services/user.service";
 import { buildPlanMessage } from "../utils/plan-message";
 import { safeReply } from "../utils/telegram";
@@ -94,6 +95,17 @@ const maybeSendMorningPlan = async (ctx: BotContext, user: Awaited<ReturnType<ty
 
   await safeReply(ctx, "Собираю информацию");
   try {
+    const syncResult = await syncFromTickTickToDb(user.id);
+    if (!syncResult.ok) {
+      await safeReply(ctx, `⚠️ Синхронизация TickTick не выполнена: ${syncResult.authHint}`);
+      await safeReply(ctx, "Автоплан будет построен по последним данным из БД.");
+    } else {
+      console.log("[Mood] auto-plan ticktick sync completed", {
+        userId: user.id,
+        tasksCount: syncResult.tasksCount,
+      });
+    }
+
     const plan = await runPlanAndStoreSuggestions(user);
     const message = await buildPlanMessage(user.id, plan);
     await safeReply(ctx, message);

@@ -1,4 +1,5 @@
 import type { Context } from "grammy";
+import { syncFromTickTickToDb } from "../services/sync-orchestrator.service";
 import { ensureUserByTelegramId } from "../services/user.service";
 import { runPlanAndStoreSuggestions } from "../services/planning.service";
 import { buildPlanMessage } from "../utils/plan-message";
@@ -14,6 +15,17 @@ export const planCommand = async (ctx: Context): Promise<void> => {
   await safeReply(ctx, "Собираю информацию");
 
   const user = await ensureUserByTelegramId(tgUserId);
+  const syncResult = await syncFromTickTickToDb(user.id);
+  if (!syncResult.ok) {
+    await safeReply(ctx, `⚠️ Синхронизация TickTick не выполнена: ${syncResult.authHint}`);
+    await safeReply(ctx, "План будет построен по последним данным из БД.");
+  } else {
+    console.log("[Bot] /plan ticktick sync completed", {
+      userId: user.id,
+      tasksCount: syncResult.tasksCount,
+    });
+  }
+
   let plan;
   try {
     plan = await runPlanAndStoreSuggestions(user);
