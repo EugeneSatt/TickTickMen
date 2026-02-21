@@ -25,6 +25,7 @@ interface CometCompletionResponse {
 
 export const summarizeTasks = async (tasksText: string): Promise<string> => {
   const apiKey = process.env.COMET_API_KEY;
+  const model = (process.env.COMET_MODEL?.trim() || "gemini-2.5-pro");
 
   if (!apiKey) {
     console.error("[CometAPI] Missing COMET_API_KEY environment variable");
@@ -32,7 +33,7 @@ export const summarizeTasks = async (tasksText: string): Promise<string> => {
   }
 
   const payload: CometCompletionRequest = {
-    model: "gpt-5.2",
+    model,
     messages: [
       {
         role: SYSTEM_PROMPTS.role,

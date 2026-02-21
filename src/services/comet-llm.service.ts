@@ -22,7 +22,17 @@ const getNonEmptyEnv = (value: string | undefined): string | null => {
 const getCometModel = (): string =>
   getNonEmptyEnv(process.env.COMET_MODEL) ??
   getNonEmptyEnv(process.env.COMETAPI_MODEL) ??
-  "gpt-5.2";
+  "gemini-2.5-pro";
+
+const FALLBACK_MODELS = ["gemini-2.5-flash"];
+
+const isDeploymentNotFoundError = (error: unknown): boolean => {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+  const message = JSON.stringify(error.response?.data ?? {});
+  return message.includes("DeploymentNotFound");
+};
 
 interface CometResponse {
   choices?: Array<{
@@ -46,38 +56,63 @@ const postComet = async (system: string, user: string): Promise<string> => {
   if (!apiKey) {
     throw new Error("Missing COMET_API_KEY/COMETAPI_API_KEY");
   }
-  const model = getCometModel();
+  const modelsToTry = [getCometModel(), ...FALLBACK_MODELS.filter((m) => m !== getCometModel())];
 
-  let response: { data: CometResponse };
-  try {
-    response = await axios.post<CometResponse>(
-      COMET_API_URL,
-      {
-        model,
-        messages: [
-          { role: SYSTEM_PROMPTS.role, content: system },
-          { role: "user", content: user },
-        ],
-        temperature: 0.2,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
+  let lastError: unknown = null;
+  let response: { data: CometResponse } | null = null;
+
+  for (const model of modelsToTry) {
+    try {
+      response = await axios.post<CometResponse>(
+        COMET_API_URL,
+        {
+          model,
+          messages: [
+            { role: SYSTEM_PROMPTS.role, content: system },
+            { role: "user", content: user },
+          ],
+          temperature: 0.2,
         },
-        timeout: 30000,
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          timeout: 30000,
+        }
+      );
+      if (model !== modelsToTry[0]) {
+        console.log(`[Comet] fallback model used: ${model}`);
       }
-    );
-  } catch (error: unknown) {
-    if (axios.isAxiosError(error)) {
-      const details = typeof error.response?.data === "string"
-        ? error.response?.data
-        : JSON.stringify(error.response?.data ?? {});
+      break;
+    } catch (error: unknown) {
+      lastError = error;
+      if (isDeploymentNotFoundError(error) && model !== modelsToTry[modelsToTry.length - 1]) {
+        console.warn(`[Comet] model unavailable, trying fallback: ${model}`);
+        continue;
+      }
+      if (axios.isAxiosError(error)) {
+        const details = typeof error.response?.data === "string"
+          ? error.response?.data
+          : JSON.stringify(error.response?.data ?? {});
+        throw new Error(
+          `Comet API request failed (${error.response?.status ?? "NO_STATUS"}): ${details}`
+        );
+      }
+      throw error;
+    }
+  }
+
+  if (!response) {
+    if (axios.isAxiosError(lastError)) {
+      const details = typeof lastError.response?.data === "string"
+        ? lastError.response?.data
+        : JSON.stringify(lastError.response?.data ?? {});
       throw new Error(
-        `Comet API request failed (${error.response?.status ?? "NO_STATUS"}): ${details}`
+        `Comet API request failed (${lastError.response?.status ?? "NO_STATUS"}): ${details}`
       );
     }
-    throw error;
+    throw lastError ?? new Error("Comet API request failed");
   }
 
   const content = response.data.choices?.[0]?.message?.content?.trim();
