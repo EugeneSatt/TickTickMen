@@ -139,7 +139,7 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
         status: TaskStatus.OPEN,
       },
       orderBy: [{ dueAt: "asc" }, { createdAt: "asc" }],
-      take: 100,
+      take: 15,
       select: {
         id: true,
         title: true,

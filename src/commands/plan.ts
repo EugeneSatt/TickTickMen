@@ -5,6 +5,13 @@ import { runPlanAndStoreSuggestions } from "../services/planning.service";
 import { buildPlanMessage } from "../utils/plan-message";
 import { safeReply } from "../utils/telegram";
 
+const toErrorText = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+};
+
 export const planCommand = async (ctx: Context): Promise<void> => {
   const tgUserId = String(ctx.from?.id ?? "");
   if (!tgUserId) {
@@ -30,10 +37,11 @@ export const planCommand = async (ctx: Context): Promise<void> => {
   try {
     plan = await runPlanAndStoreSuggestions(user);
   } catch (error: unknown) {
-    console.error("[Bot] /plan failed", error);
+    const errorText = toErrorText(error);
+    console.error("[Bot] /plan failed", { errorText, error });
     await safeReply(
       ctx,
-      "⚠️ Не удалось построить план. Проверь COMET_API_KEY/COMET_MODEL и повтори позже."
+      `⚠️ Не удалось построить план: ${errorText}`
     );
     return;
   }

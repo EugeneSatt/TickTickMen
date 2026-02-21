@@ -88,6 +88,13 @@ const askIntInRange = async (
   }
 };
 
+const toErrorText = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+};
+
 const maybeSendMorningPlan = async (ctx: BotContext, user: Awaited<ReturnType<typeof ensureUserByTelegramId>>, isMorning: boolean) => {
   if (!isMorning) {
     return;
@@ -110,10 +117,11 @@ const maybeSendMorningPlan = async (ctx: BotContext, user: Awaited<ReturnType<ty
     const message = await buildPlanMessage(user.id, plan);
     await safeReply(ctx, message);
   } catch (error: unknown) {
-    console.error("[Mood] auto plan after morning check-in failed", error);
+    const errorText = toErrorText(error);
+    console.error("[Mood] auto plan after morning check-in failed", { errorText, error });
     await safeReply(
       ctx,
-      "⚠️ Самочувствие сохранено, но не удалось автоматически построить план. Попробуй /plan."
+      `⚠️ Самочувствие сохранено, но автоплан не построен: ${errorText}`
     );
   }
 };
