@@ -1,5 +1,6 @@
 import axios, { AxiosError } from "axios";
 import { LLM_PROMPTS, SYSTEM_PROMPTS } from "../config/llm-prompts";
+import { sendPromptLog } from "./llm-logs.service";
 import type {
   PlanInput,
   PlanOutput,
@@ -10,6 +11,7 @@ import type {
 import { REASON_CODES } from "../types/domain.types";
 
 const COMET_API_URL = "https://api.cometapi.com/v1/chat/completions";
+const DEFAULT_COMET_TIMEOUT_MS = 90_000;
 
 const getNonEmptyEnv = (value: string | undefined): string | null => {
   if (!value) {
@@ -23,6 +25,14 @@ const getCometModel = (): string =>
   getNonEmptyEnv(process.env.COMET_MODEL) ??
   getNonEmptyEnv(process.env.COMETAPI_MODEL) ??
   "gemini-2.5-pro";
+
+const getCometTimeoutMs = (): number => {
+  const raw = Number(process.env.COMET_TIMEOUT_MS);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return DEFAULT_COMET_TIMEOUT_MS;
+  }
+  return Math.floor(raw);
+};
 
 const FALLBACK_MODELS = ["gemini-2.5-flash"];
 const RETRYABLE_NETWORK_CODES = new Set(["ECONNRESET", "ETIMEDOUT", "EAI_AGAIN", "ECONNABORTED"]);
@@ -77,6 +87,7 @@ const postComet = async (system: string, user: string): Promise<string> => {
   if (!apiKey) {
     throw new Error("Missing COMET_API_KEY/COMETAPI_API_KEY");
   }
+  const timeoutMs = getCometTimeoutMs();
   const modelsToTry = [getCometModel(), ...FALLBACK_MODELS.filter((m) => m !== getCometModel())];
 
   let lastError: unknown = null;
@@ -86,6 +97,14 @@ const postComet = async (system: string, user: string): Promise<string> => {
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
+        if (attempt === 1) {
+          await sendPromptLog({
+            source: "comet-llm",
+            model,
+            system,
+            user,
+          });
+        }
         response = await axios.post<CometResponse>(
           COMET_API_URL,
           {
@@ -101,7 +120,7 @@ const postComet = async (system: string, user: string): Promise<string> => {
               Authorization: `Bearer ${apiKey}`,
               "Content-Type": "application/json",
             },
-            timeout: 30000,
+            timeout: timeoutMs,
           }
         );
         if (model !== modelsToTry[0]) {

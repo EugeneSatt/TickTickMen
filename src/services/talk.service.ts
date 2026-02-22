@@ -2,6 +2,7 @@ import axios from "axios";
 import { Prisma, TaskSource, TaskStatus } from "@prisma/client";
 import type { Bot } from "grammy";
 import { LLM_PROMPTS } from "../config/llm-prompts";
+import { sendPromptLog } from "./llm-logs.service";
 import { prisma } from "../db/prisma";
 import { completeTask, getActiveTasks } from "./ticktick.service";
 
@@ -386,6 +387,12 @@ const summarizeTalkTopicWithLlm = async (
   });
 
   try {
+    await sendPromptLog({
+      source: "talk-summary",
+      model,
+      system: systemPrompt,
+      user: userPrompt,
+    });
     const response = await axios.post<CometResponse>(
       COMET_API_URL,
       {

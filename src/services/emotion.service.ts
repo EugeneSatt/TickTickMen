@@ -5,6 +5,7 @@ import type { Bot } from "grammy";
 import { MoodLevel, ReasonCode, type PrismaClient } from "@prisma/client";
 import { prisma } from "../db/prisma";
 import { LLM_PROMPTS, SYSTEM_PROMPTS } from "../config/llm-prompts";
+import { sendPromptLog } from "./llm-logs.service";
 import { isWithinCronWindow } from "../utils/cron-time-window";
 
 const COMET_API_BASE = "https://api.cometapi.com/v1";
@@ -160,6 +161,12 @@ export const extractCheckinFromText = async (rawText: string): Promise<CheckinEx
   const model = (process.env.COMET_MODEL ?? process.env.COMETAPI_MODEL ?? "gpt-5.2").trim() || "gpt-5.2";
 
   const system = LLM_PROMPTS.moodExtractionJson;
+  await sendPromptLog({
+    source: "emotion-extract-checkin",
+    model,
+    system,
+    user: rawText,
+  });
 
   const response = await axios.post<{ choices?: Array<{ message?: { content?: string } }> }>(
     `${COMET_API_BASE}/chat/completions`,

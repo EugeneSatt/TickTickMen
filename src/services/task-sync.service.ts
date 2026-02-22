@@ -69,6 +69,7 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
   let createdCount = 0;
   let updatedCount = 0;
   let reopenedCount = 0;
+  let autoCompletedCount = 0;
 
   for (const incoming of tasks) {
     const existing = await prisma.task.findFirst({
@@ -138,15 +139,29 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     }
   }
 
-  const deletedResult = await prisma.task.updateMany({
+  const missingOpenTasks = await prisma.task.findMany({
     where: {
       userId,
       source: TaskSource.TICKTICK,
       status: TaskStatus.OPEN,
       id: { notIn: touchedTaskIds.length ? touchedTaskIds : ["__none__"] },
     },
+    select: { id: true },
+  });
+
+  const autoCompletedIds = missingOpenTasks.map((task) => task.id);
+  autoCompletedCount = autoCompletedIds.length;
+
+  const completedResult = await prisma.task.updateMany({
+    where: {
+      userId,
+      source: TaskSource.TICKTICK,
+      status: TaskStatus.OPEN,
+      id: { in: autoCompletedIds.length ? autoCompletedIds : ["__none__"] },
+    },
     data: {
-      status: TaskStatus.DELETED,
+      status: TaskStatus.DONE,
+      completedAt: now,
       lastSeenAt: now,
     },
   });
@@ -162,6 +177,20 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     });
   }
 
+  if (autoCompletedIds.length) {
+    await prisma.taskEvent.createMany({
+      data: autoCompletedIds.map((taskId) => ({
+        userId,
+        taskId,
+        type: "SYNC_AUTO_COMPLETE_MISSING",
+        at: now,
+        fromStatus: TaskStatus.OPEN,
+        toStatus: TaskStatus.DONE,
+        meta: { source: "TICKTICK_SYNC_MISSING_TASK" },
+      })),
+    });
+  }
+
   console.log("[TaskSync] syncTickTickTasksToDb finished", {
     userId,
     incomingTasksCount: tasks.length,
@@ -170,7 +199,8 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     createdCount,
     updatedCount,
     reopenedCount,
-    deletedCount: deletedResult.count,
+    autoCompletedCount,
+    completedCount: completedResult.count,
     touchedCount: touchedTaskIds.length,
     elapsedMs: Date.now() - startedAt,
   });
