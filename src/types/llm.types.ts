@@ -14,6 +14,20 @@ export interface PlanInput {
     } | null;
   };
   features7d: Record<string, number | string | boolean | null>;
+  tasksStats7d: {
+    done7d: number;
+    openNow: number;
+    overdueOpenNow: number;
+    doneToOpenRatio: number;
+  };
+  emotion7d: {
+    checkins: number;
+    avgEnergy: number;
+    avgFocus: number;
+    avgMood: number;
+    lowEnergyDays: number;
+    negativeMoodDays: number;
+  };
   activeTasks: Array<{
     id: string;
     title: string;

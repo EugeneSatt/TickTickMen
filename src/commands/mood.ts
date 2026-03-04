@@ -14,19 +14,18 @@ import { buildPlanMessage } from "../utils/plan-message";
 import { safeReply } from "../utils/telegram";
 
 const reasonKeyboard = new Keyboard()
-  .text("Нет ясности")
-  .text("Слишком большая задача")
+  .text("Тревожность")
+  .text("Апатия")
   .row()
-  .text("Страх последствий")
-  .text("Сон")
+  .text("Перегрев")
+  .text("Воодушевление")
   .row()
-  .text("Усталость")
-  .text("Социальная тревога")
+  .text("Спокойствие")
+  .text("Раздражение")
   .row()
-  .text("Переключение контекста")
-  .text("Перегруз")
-  .row()
-  .text("Другое")
+  .text("Бессмысленность")
+  .text("Пост-грусть")
+  .text("Драйв")
   .resized();
 
 const level1to5Keyboard = new Keyboard().text("1").text("2").text("3").text("4").text("5").resized();
@@ -56,15 +55,15 @@ const waitText = async (conversation: BotConversation, ctx: BotContext): Promise
 };
 
 const reasonMap: Record<string, string> = {
-  "НЕТ ЯСНОСТИ": "NO_CLARITY",
-  "СЛИШКОМ БОЛЬШАЯ ЗАДАЧА": "BIG_TASK",
-  "СТРАХ ПОСЛЕДСТВИЙ": "FEAR_CONSEQUENCES",
-  "СОН": "SLEEP",
-  "УСТАЛОСТЬ": "FATIGUE",
-  "СОЦИАЛЬНАЯ ТРЕВОГА": "SOCIAL_ANXIETY",
-  "ПЕРЕКЛЮЧЕНИЕ КОНТЕКСТА": "CONTEXT_SWITCH",
-  "ПЕРЕГРУЗ": "OVERLOAD",
-  "ДРУГОЕ": "OTHER",
+  "ТРЕВОЖНОСТЬ": "SOCIAL_ANXIETY",
+  "АПАТИЯ": "FATIGUE",
+  "ПЕРЕГРЕВ": "OVERLOAD",
+  "ВООДУШЕВЛЕНИЕ": "OTHER",
+  "СПОКОЙСТВИЕ": "OTHER",
+  "РАЗДРАЖЕНИЕ": "CONTEXT_SWITCH",
+  "БЕССМЫСЛЕННОСТЬ": "NO_CLARITY",
+  "ПОСТ-ГРУСТЬ": "OTHER",
+  "ДРАЙВ": "OTHER",
 };
 
 const askIntInRange = async (

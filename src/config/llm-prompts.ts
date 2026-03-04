@@ -78,6 +78,12 @@ export const LLM_PROMPTS = {
 === АГРЕГАТЫ ЗА 7 ДНЕЙ ===
 {{features_7d_json}}
 
+=== СТАТИСТИКА ЗАКРЫТЫХ/НЕЗАКРЫТЫХ ЗАДАЧ (7 ДНЕЙ) ===
+{{tasks_stats_7d_json}}
+
+=== ЭМОЦИОНАЛЬНОЕ СОСТОЯНИЕ (7 ДНЕЙ) ===
+{{emotion_7d_json}}
+
 === AGE СТАТИСТИКА ===
 {{ageStats_json}}
 

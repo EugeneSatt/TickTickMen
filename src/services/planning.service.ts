@@ -121,6 +121,96 @@ const getRulesMap = async (userId: string) => {
   }, {});
 };
 
+const buildTasksStats7d = async (userId: string, day: DateTime) => {
+  const from = day.minus({ days: 6 }).startOf("day").toJSDate();
+  const to = day.endOf("day").toJSDate();
+
+  const [done7d, openNow, overdueOpenNow] = await Promise.all([
+    prisma.task.count({
+      where: {
+        userId,
+        status: TaskStatus.DONE,
+        completedAt: { gte: from, lte: to },
+      },
+    }),
+    prisma.task.count({
+      where: {
+        userId,
+        status: TaskStatus.OPEN,
+      },
+    }),
+    prisma.task.count({
+      where: {
+        userId,
+        status: TaskStatus.OPEN,
+        dueAt: { lt: day.startOf("day").toJSDate() },
+      },
+    }),
+  ]);
+
+  return {
+    done7d,
+    openNow,
+    overdueOpenNow,
+    doneToOpenRatio: openNow > 0 ? Number((done7d / openNow).toFixed(2)) : done7d,
+  };
+};
+
+const buildEmotionStats7d = async (userId: string, day: DateTime) => {
+  const from = day.minus({ days: 6 }).startOf("day").toJSDate();
+  const to = day.endOf("day").toJSDate();
+
+  const checkins = await prisma.dailyCheckIn.findMany({
+    where: {
+      userId,
+      day: { gte: from, lte: to },
+    },
+    select: {
+      day: true,
+      energy: true,
+      focus: true,
+      mood: true,
+    },
+    orderBy: { day: "asc" },
+  });
+
+  if (!checkins.length) {
+    return {
+      checkins: 0,
+      avgEnergy: 0,
+      avgFocus: 0,
+      avgMood: 0,
+      lowEnergyDays: 0,
+      negativeMoodDays: 0,
+    };
+  }
+
+  const avgEnergy = checkins.reduce((acc, item) => acc + item.energy, 0) / checkins.length;
+  const avgFocus = checkins.reduce((acc, item) => acc + item.focus, 0) / checkins.length;
+  const moods = checkins.map((item) => moodToInt(item.mood));
+  const avgMood = moods.reduce((acc, value) => acc + value, 0) / moods.length;
+
+  const lowEnergyDaysSet = new Set(
+    checkins
+      .filter((item) => item.energy <= 2)
+      .map((item) => DateTime.fromJSDate(item.day).toFormat("yyyy-LL-dd"))
+  );
+  const negativeMoodDaysSet = new Set(
+    checkins
+      .filter((item) => moodToInt(item.mood) < 0)
+      .map((item) => DateTime.fromJSDate(item.day).toFormat("yyyy-LL-dd"))
+  );
+
+  return {
+    checkins: checkins.length,
+    avgEnergy: Number(avgEnergy.toFixed(2)),
+    avgFocus: Number(avgFocus.toFixed(2)),
+    avgMood: Number(avgMood.toFixed(2)),
+    lowEnergyDays: lowEnergyDaysSet.size,
+    negativeMoodDays: negativeMoodDaysSet.size,
+  };
+};
+
 export const buildPlanInput = async (user: User): Promise<PlanInput> => {
   const now = DateTime.now().setZone(user.timezone);
   const day = now.startOf("day");
@@ -129,10 +219,12 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
 
   const yesterday = day.minus({ days: 1 });
 
-  const [morningCheckIn, yesterdayEveningCheckIn, features7d, activeTasks, focusProject, rules] = await Promise.all([
+  const [morningCheckIn, yesterdayEveningCheckIn, features7d, tasksStats7d, emotion7d, activeTasks, focusProject, rules] = await Promise.all([
     getMorningCheckIn(user.id, day),
     getEveningCheckIn(user.id, yesterday),
     getFeatures7dAggregate(user.id, day),
+    buildTasksStats7d(user.id, day),
+    buildEmotionStats7d(user.id, day),
     prisma.task.findMany({
       where: {
         userId: user.id,
@@ -169,6 +261,8 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
         : null,
     },
     features7d,
+    tasksStats7d,
+    emotion7d,
     activeTasks: activeTasks.map(toPlanTask),
     focusProject: focusProject
       ? {
