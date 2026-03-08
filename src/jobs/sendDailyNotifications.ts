@@ -5,6 +5,7 @@ import { prisma } from "../db/prisma";
 import { sendScheduledCheckinPrompts } from "../services/emotion.service";
 import { recomputeDailyFeatures } from "../services/features.service";
 import { processPomodoroPromptsForAllUsers } from "../services/pomodoro.service";
+import { processNewsDigestPrompts } from "../services/news-digest.service";
 import { sendCalendarWeekReviewToAllUsers } from "../services/planning.service";
 import { syncFromTickTickToAllUsers } from "../services/sync-orchestrator.service";
 import { sendAutoTalkSummariesToAllUsers } from "../services/talk.service";
@@ -58,6 +59,9 @@ export async function runDailyNotifications(): Promise<void> {
   } else {
     console.log("[CronJob] Skipping check-in notifications (no BOT_TOKEN)");
   }
+
+  await processNewsDigestPrompts();
+  console.log("[CronJob] News digest prompts processed");
 
   const shouldRecompute = isWithinCronWindow(nowMoscow, 0, 5);
   console.log(`[CronJob] daily features recompute check: ${shouldRecompute ? "RUN" : "SKIP"}`);
