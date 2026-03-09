@@ -5,6 +5,7 @@ import { LLM_PROMPTS } from "../config/llm-prompts";
 import { sendPromptLog } from "./llm-logs.service";
 import { prisma } from "../db/prisma";
 import { completeTask, getActiveTasks } from "./ticktick.service";
+import { syncFromTickTickToDb } from "./sync-orchestrator.service";
 
 const COMET_API_URL = "https://api.cometapi.com/v1/chat/completions";
 const GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search";
@@ -688,6 +689,16 @@ export const sendAutoTalkSummariesToAllUsers = async (
     }
 
     try {
+      const syncResult = await syncFromTickTickToDb(user.id);
+      if (!syncResult.ok) {
+        failedUsers += 1;
+        console.error("[Talk] Auto summary skipped: TickTick sync failed", {
+          userId: user.id,
+          authHint: syncResult.authHint,
+        });
+        continue;
+      }
+
       const summaries = await buildTalkTopicSummariesForUser(user.id);
       if (!summaries.length) {
         await markTalkAutoSent({

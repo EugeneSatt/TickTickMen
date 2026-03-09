@@ -45,13 +45,13 @@ const getTimeoutMs = (): number => {
 
 const getChatId = (): string => process.env.LOGS_CHAT_ID?.trim() || process.env.ALLOWED_TG_USER_ID?.trim() || "841208806";
 
-const getLogsBotToken = (): string | null => {
-  const token = process.env.LOGS_BOT_TOKEN?.trim();
+const getTalkBotToken = (): string | null => {
+  const token = process.env.BOT_TOKEN_TALK?.trim();
   return token && token.length > 0 ? token : null;
 };
 
-const createLogsBot = (): Bot | null => {
-  const token = getLogsBotToken();
+const createTalkBot = (): Bot | null => {
+  const token = getTalkBotToken();
   if (!token) {
     return null;
   }
@@ -248,9 +248,9 @@ const generateNewsDigest = async (context: string): Promise<string> => {
 };
 
 export const processNewsDigestPrompts = async (): Promise<void> => {
-  const bot = createLogsBot();
+  const bot = createTalkBot();
   if (!bot) {
-    console.log("[NewsDigest] skipped: LOGS_BOT_TOKEN is not set");
+    console.log("[NewsDigest] skipped: BOT_TOKEN_TALK is not set");
     return;
   }
 

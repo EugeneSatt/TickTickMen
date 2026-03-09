@@ -14,6 +14,10 @@ import { CRON_WINDOW_MINUTES, isWithinCronWindow } from "../utils/cron-time-wind
 const MOSCOW_TZ = "Europe/Moscow";
 
 const isMonday = (now: DateTime): boolean => now.weekday === 1;
+const isAtOrAfter = (now: DateTime, hour: number, minute: number): boolean => {
+  const target = now.set({ hour, minute, second: 0, millisecond: 0 });
+  return now.toMillis() >= target.toMillis();
+};
 
 const createBot = (): Bot | null => {
   const token = process.env.BOT_TOKEN?.trim();
@@ -78,7 +82,8 @@ export async function runDailyNotifications(): Promise<void> {
     console.log("[CronJob] Weekly calendar reviews processed");
   }
 
-  const shouldTalkDigest = isWithinCronWindow(nowMoscow, 18, 0);
+  // Send once/day after 18:00 MSK (dedupe is enforced in talk.service by dayKey rule).
+  const shouldTalkDigest = isAtOrAfter(nowMoscow, 18, 0);
   const talkBot = shouldTalkDigest ? createTalkBot() : null;
   console.log(`[CronJob] talk digest check: ${shouldTalkDigest ? "RUN" : "SKIP"} (hasTalkBot=${Boolean(talkBot)})`);
   if (shouldTalkDigest && talkBot) {
