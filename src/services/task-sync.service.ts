@@ -191,6 +191,40 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     });
   }
 
+  // Remove stale auto-generated TickTick projects that disappeared from current TickTick data.
+  // We only delete "empty" projects to avoid touching manually managed project cards.
+  const staleProjectWhere: Prisma.ProjectWhereInput = {
+    userId,
+    status: ProjectStatus.ACTIVE,
+    weeklyFocus: false,
+    vision: null,
+    metric: null,
+    horizonMonths: null,
+    revenueGoal: null,
+    riskLevel: null,
+    energyScore: null,
+    notes: { none: {} },
+    tasks: { none: { status: TaskStatus.OPEN } },
+    name: uniqueProjectNames.length
+      ? { notIn: uniqueProjectNames }
+      : undefined,
+  };
+
+  const staleProjects = await prisma.project.findMany({
+    where: staleProjectWhere,
+    select: { id: true, name: true },
+  });
+
+  let deletedStaleProjectsCount = 0;
+  if (staleProjects.length) {
+    const deleted = await prisma.project.deleteMany({
+      where: {
+        id: { in: staleProjects.map((project) => project.id) },
+      },
+    });
+    deletedStaleProjectsCount = deleted.count;
+  }
+
   console.log("[TaskSync] syncTickTickTasksToDb finished", {
     userId,
     incomingTasksCount: tasks.length,
@@ -201,6 +235,7 @@ export const syncTickTickTasksToDb = async (userId: string, tasks: TickTickTask[
     reopenedCount,
     autoCompletedCount,
     completedCount: completedResult.count,
+    deletedStaleProjectsCount,
     touchedCount: touchedTaskIds.length,
     elapsedMs: Date.now() - startedAt,
   });
