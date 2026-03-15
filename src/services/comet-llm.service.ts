@@ -280,6 +280,9 @@ export const generateWeeklyReviewAnalysis = async (
     "=== ПЕРИОД АНАЛИЗА ===",
     input.periodDescription,
     "",
+    "=== РЕЖИМ АГЕНТА ===",
+    JSON.stringify(input.agentMode),
+    "",
     "=== СВОДНАЯ СТАТИСТИКА ЗА ПЕРИОД ===",
     JSON.stringify(input.weeklyFeatures),
     "",
@@ -297,6 +300,9 @@ export const generateWeeklyReviewAnalysis = async (
     "",
     "=== ФОКУС ПРОЕКТ НЕДЕЛИ ===",
     JSON.stringify(input.focusProject),
+    "",
+    "=== ПОВЕДЕНИЕ ПО ДНЕВНЫМ ПЛАНАМ ===",
+    JSON.stringify(input.planBehavior),
   ].join("\n");
 
   const content = await postComet(systemPrompt, userPayload);

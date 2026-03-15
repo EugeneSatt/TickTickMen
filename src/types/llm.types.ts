@@ -1,6 +1,37 @@
 import type { PlanSuggestionCategory, ReasonCode } from "./domain.types";
 
+export type AgentMode = "FOUNDATION" | "PRE_STARTUP" | "STARTUP";
+
+export interface BehaviorPatterns7d {
+  plannedDays: number;
+  focusTasksPlanned: number;
+  focusTasksCompletedSameDay: number;
+  completedOutsidePlanSameDay: number;
+  followThroughRate: number;
+  outsidePlanRate: number;
+  daysWithAnyFocusDone: number;
+  daysWithOnlyOutsidePlanDone: number;
+  topOutsidePlanProjects: Array<{
+    project: string;
+    count: number;
+  }>;
+  topOutsidePlanCategories: {
+    MONEY: number;
+    GROWTH: number;
+    SYSTEM: number;
+    LIFE: number;
+    UNKNOWN: number;
+  };
+  recentOutsidePlanCompleted: Array<{
+    title: string;
+    project: string;
+    category: string;
+  }>;
+  insights: string[];
+}
+
 export interface PlanInput {
+  agentMode: AgentMode;
   today: {
     day: string;
     energy: number;
@@ -28,6 +59,7 @@ export interface PlanInput {
     lowEnergyDays: number;
     negativeMoodDays: number;
   };
+  behaviorPatterns7d: BehaviorPatterns7d;
   activeTasks: Array<{
     id: string;
     title: string;
@@ -79,6 +111,7 @@ export interface ReviewOutput {
 }
 
 export interface WeeklyReviewInput {
+  agentMode: AgentMode;
   periodDescription: string;
   weeklyFeatures: {
     tasksAdded: number;
@@ -122,6 +155,7 @@ export interface WeeklyReviewInput {
     vision: string | null;
     metric: string | null;
   } | null;
+  planBehavior: BehaviorPatterns7d;
 }
 
 export interface WeeklyReviewOutput {

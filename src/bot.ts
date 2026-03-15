@@ -2,6 +2,7 @@ import "dotenv/config";
 import { conversations, createConversation } from "@grammyjs/conversations";
 import { Bot, GrammyError } from "grammy";
 import { applyCategoriesCommand } from "./commands/apply-categories";
+import { agentModeCallbackHandler, agentModeCommand } from "./commands/agent-mode";
 import {
   moodCallbackHandler,
   moodPromptCommand,
@@ -67,6 +68,7 @@ bot.command("start", startCommand);
 bot.command("tasks", tasksCommand);
 bot.command("talk", talkCommand);
 bot.command("plan", planCommand);
+bot.command("agent_mode", agentModeCommand as any);
 bot.command("apply_categories", applyCategoriesCommand);
 bot.command("review", reviewCommand);
 bot.command("summary_daily", summaryDailyCommand);
@@ -82,6 +84,7 @@ bot.command("project_note", projectNoteCommand as any);
 bot.command("project_help", projectHelpCommand as any);
 bot.command("task_project", taskProjectCommand as any);
 bot.command("task_done", taskDoneCommand as any);
+bot.callbackQuery(/^agent_mode:set:/, agentModeCallbackHandler as any);
 bot.callbackQuery(/^mood:/, moodCallbackHandler as any);
 bot.callbackQuery(/^pomodoro:stop$/, pomodoroStopCallbackHandler as any);
 bot.callbackQuery(/^project_update:/, projectUpdateCallbackHandler as any);

@@ -2,14 +2,21 @@ import { DateTime } from "luxon";
 import {
   Prisma,
   TaskCategory,
+  TaskSource,
   TaskStatus,
   type DailyCheckIn,
   type User,
 } from "@prisma/client";
 import type { Bot } from "grammy";
 import { prisma } from "../db/prisma";
-import type { PlanInput, PlanOutput, WeeklyReviewInput } from "../types/llm.types";
+import type {
+  BehaviorPatterns7d,
+  PlanInput,
+  PlanOutput,
+  WeeklyReviewInput,
+} from "../types/llm.types";
 import { moodToInt } from "../types/domain.types";
+import { getAgentModeForUser } from "./agent-mode.service";
 import { getFeatures7dAggregate, recomputeDailyFeatures } from "./features.service";
 import {
   generatePlan,
@@ -19,9 +26,204 @@ import {
 } from "./comet-llm.service";
 
 const PLAN_SUGGESTIONS_RULE_PREFIX = "plan_category_suggestions:";
+const DAILY_PLAN_SNAPSHOT_RULE_PREFIX = "daily_plan_snapshot:";
+const TALK_PHRASE_MARKERS = ["/talk", "/толк", "slash talk", "слеш толк"];
 
 const truncate = (text: string, limit: number): string =>
   text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+
+interface StoredPlanFocusItem {
+  taskId: string;
+  title: string;
+  project: string;
+  category: string;
+  reason: string;
+}
+
+interface StoredPlanFallbackItem {
+  forTaskId: string;
+  title: string;
+  alternativeAction: string;
+  reason: string;
+}
+
+interface DailyPlanSnapshotValue {
+  day: string;
+  generatedAt: string;
+  today: PlanInput["today"];
+  focus: StoredPlanFocusItem[];
+  fallbackOptions: StoredPlanFallbackItem[];
+  doNotDo: string;
+  riskOfTheDay: string;
+  warnings: string[];
+  strategyNote: string;
+}
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const normalizeTaskCategory = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return "UNKNOWN";
+  }
+  if (["MONEY", "GROWTH", "SYSTEM", "LIFE", "UNKNOWN"].includes(value)) {
+    return value;
+  }
+  return "UNKNOWN";
+};
+
+const isReminderProject = (projectName: string | null): boolean => {
+  const normalized = projectName?.trim().toLowerCase() ?? "";
+  return (
+    normalized === "напоминания" ||
+    normalized === "reminders" ||
+    normalized === "reminder"
+  );
+};
+
+const isTalkLikeTask = (title: string): boolean => {
+  const normalized = title.trim().toLowerCase();
+  return TALK_PHRASE_MARKERS.some((marker) => normalized.includes(marker));
+};
+
+const shouldCountInBehavior = (task: { title: string; projectName: string | null }): boolean =>
+  !isTalkLikeTask(task.title) && !isReminderProject(task.projectName);
+
+const dailyPlanSnapshotRuleKey = (userId: string, dayKey: string): string =>
+  `${DAILY_PLAN_SNAPSHOT_RULE_PREFIX}${userId}:${dayKey}`;
+
+const parseDailyPlanSnapshot = (value: Prisma.JsonValue): DailyPlanSnapshotValue | null => {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  const focus = Array.isArray(value.focus)
+    ? value.focus
+        .map((item) => {
+          if (!isObjectRecord(item)) {
+            return null;
+          }
+          const taskId = typeof item.taskId === "string" ? item.taskId : "";
+          const title = typeof item.title === "string" ? item.title : "";
+          if (!taskId || !title) {
+            return null;
+          }
+          return {
+            taskId,
+            title,
+            project: typeof item.project === "string" ? item.project : "Без проекта",
+            category: normalizeTaskCategory(item.category),
+            reason: typeof item.reason === "string" ? item.reason : "",
+          };
+        })
+        .filter((item): item is StoredPlanFocusItem => item !== null)
+    : [];
+
+  const fallbackOptions = Array.isArray(value.fallbackOptions)
+    ? value.fallbackOptions
+        .map((item) => {
+          if (!isObjectRecord(item)) {
+            return null;
+          }
+          const forTaskId = typeof item.forTaskId === "string" ? item.forTaskId : "";
+          const alternativeAction =
+            typeof item.alternativeAction === "string" ? item.alternativeAction : "";
+          if (!forTaskId || !alternativeAction) {
+            return null;
+          }
+          return {
+            forTaskId,
+            title: typeof item.title === "string" ? item.title : "",
+            alternativeAction,
+            reason: typeof item.reason === "string" ? item.reason : "",
+          };
+        })
+        .filter((item): item is StoredPlanFallbackItem => item !== null)
+    : [];
+
+  const today = isObjectRecord(value.today)
+    ? {
+        day: typeof value.today.day === "string" ? value.today.day : "",
+        energy: typeof value.today.energy === "number" ? value.today.energy : 3,
+        focus: typeof value.today.focus === "number" ? value.today.focus : 3,
+        mood: typeof value.today.mood === "number" ? value.today.mood : 0,
+        note: typeof value.today.note === "string" ? value.today.note : "",
+        yesterdayEvening: isObjectRecord(value.today.yesterdayEvening)
+          ? {
+              energy:
+                typeof value.today.yesterdayEvening.energy === "number"
+                  ? value.today.yesterdayEvening.energy
+                  : null,
+              mood:
+                typeof value.today.yesterdayEvening.mood === "number"
+                  ? value.today.yesterdayEvening.mood
+                  : null,
+              note:
+                typeof value.today.yesterdayEvening.note === "string"
+                  ? value.today.yesterdayEvening.note
+                  : "",
+            }
+          : null,
+      }
+    : null;
+
+  if (!today?.day) {
+    return null;
+  }
+
+  return {
+    day: typeof value.day === "string" ? value.day : today.day,
+    generatedAt: typeof value.generatedAt === "string" ? value.generatedAt : "",
+    today,
+    focus,
+    fallbackOptions,
+    doNotDo: typeof value.doNotDo === "string" ? value.doNotDo : "",
+    riskOfTheDay: typeof value.riskOfTheDay === "string" ? value.riskOfTheDay : "",
+    warnings: Array.isArray(value.warnings)
+      ? value.warnings.filter((item): item is string => typeof item === "string")
+      : [],
+    strategyNote: typeof value.strategyNote === "string" ? value.strategyNote : "",
+  };
+};
+
+const buildBehaviorInsights = (patterns: BehaviorPatterns7d): string[] => {
+  const insights: string[] = [];
+
+  if (patterns.plannedDays === 0) {
+    insights.push("Недостаточно истории дневных планов: устойчивый паттерн еще не сформирован.");
+    return insights;
+  }
+
+  if (
+    patterns.followThroughRate < 0.35 &&
+    patterns.completedOutsidePlanSameDay > patterns.focusTasksCompletedSameDay
+  ) {
+    insights.push("Чаще закрывает задачи вне предложенного дневного фокуса, чем сами фокус-задачи.");
+  }
+
+  if (patterns.daysWithOnlyOutsidePlanDone >= 2) {
+    insights.push("Есть несколько дней, где выполнены только внеплановые задачи.");
+  }
+
+  const dominantOutsideCategory = Object.entries(patterns.topOutsidePlanCategories).sort(
+    (a, b) => b[1] - a[1]
+  )[0];
+  if (dominantOutsideCategory && dominantOutsideCategory[1] >= 2) {
+    insights.push(`Вне плана чаще всего закрываются задачи категории ${dominantOutsideCategory[0]}.`);
+  }
+
+  if (patterns.topOutsidePlanProjects[0]?.count >= 2) {
+    insights.push(
+      `Вне плана часто выбираются задачи проекта "${patterns.topOutsidePlanProjects[0].project}".`
+    );
+  }
+
+  if (patterns.followThroughRate >= 0.6 && patterns.plannedDays >= 2) {
+    insights.push("Обычно следует дневному фокусу, можно держать более жесткий приоритет.");
+  }
+
+  return insights;
+};
 
 const toPlanTask = (task: {
   id: string;
@@ -119,6 +321,247 @@ const getRulesMap = async (userId: string) => {
     acc[rule.key] = rule.value;
     return acc;
   }, {});
+};
+
+const buildBehaviorPatternsForPeriod = async (
+  user: User,
+  from: DateTime,
+  to: DateTime
+): Promise<BehaviorPatterns7d> => {
+  const fromDay = from.startOf("day");
+  const toDay = to.endOf("day");
+  const fromKey = fromDay.toFormat("yyyy-LL-dd");
+  const toKey = toDay.toFormat("yyyy-LL-dd");
+
+  const [snapshotRules, completedTasks] = await Promise.all([
+    prisma.userRule.findMany({
+      where: {
+        userId: user.id,
+        isActive: true,
+        key: { startsWith: `${DAILY_PLAN_SNAPSHOT_RULE_PREFIX}${user.id}:` },
+      },
+      select: { value: true },
+    }),
+    prisma.task.findMany({
+      where: {
+        userId: user.id,
+        status: TaskStatus.DONE,
+        completedAt: {
+          gte: fromDay.toJSDate(),
+          lte: toDay.toJSDate(),
+        },
+      },
+      select: {
+        id: true,
+        title: true,
+        projectName: true,
+        category: true,
+        completedAt: true,
+        source: true,
+      },
+    }),
+  ]);
+
+  const snapshots = snapshotRules
+    .map((rule) => parseDailyPlanSnapshot(rule.value))
+    .filter((snapshot): snapshot is DailyPlanSnapshotValue => snapshot !== null)
+    .filter((snapshot) => snapshot.day >= fromKey && snapshot.day <= toKey)
+    .sort((left, right) => left.day.localeCompare(right.day));
+
+  const completedByDay = new Map<
+    string,
+    Array<{
+      id: string;
+      title: string;
+      projectName: string | null;
+      category: TaskCategory;
+      completedAt: Date;
+    }>
+  >();
+
+  for (const task of completedTasks) {
+    if (!task.completedAt || !shouldCountInBehavior(task)) {
+      continue;
+    }
+
+    let completedAtLocal = DateTime.fromJSDate(task.completedAt).setZone(user.timezone);
+    // Night TickTick sync marks missing tasks as done around 02:00, so attribute them to the previous day.
+    if (task.source === TaskSource.TICKTICK && completedAtLocal.hour < 5) {
+      completedAtLocal = completedAtLocal.minus({ days: 1 });
+    }
+
+    const dayKey = completedAtLocal.toFormat("yyyy-LL-dd");
+    if (dayKey < fromKey || dayKey > toKey) {
+      continue;
+    }
+
+    const bucket = completedByDay.get(dayKey) ?? [];
+    bucket.push({
+      id: task.id,
+      title: task.title,
+      projectName: task.projectName,
+      category: task.category,
+      completedAt: task.completedAt,
+    });
+    completedByDay.set(dayKey, bucket);
+  }
+
+  let focusTasksPlanned = 0;
+  let focusTasksCompletedSameDay = 0;
+  let completedOutsidePlanSameDay = 0;
+  let daysWithAnyFocusDone = 0;
+  let daysWithOnlyOutsidePlanDone = 0;
+
+  const outsideProjectCounts = new Map<string, number>();
+  const topOutsidePlanCategories: BehaviorPatterns7d["topOutsidePlanCategories"] = {
+    MONEY: 0,
+    GROWTH: 0,
+    SYSTEM: 0,
+    LIFE: 0,
+    UNKNOWN: 0,
+  };
+  const recentOutsidePlanCompleted: Array<{
+    title: string;
+    project: string;
+    category: string;
+    completedAt: Date;
+  }> = [];
+
+  for (const snapshot of snapshots) {
+    focusTasksPlanned += snapshot.focus.length;
+
+    const doneForDay = completedByDay.get(snapshot.day) ?? [];
+    const focusIds = new Set(snapshot.focus.map((item) => item.taskId));
+    const completedFromFocus = doneForDay.filter((task) => focusIds.has(task.id));
+    const completedOutsidePlan = doneForDay.filter((task) => !focusIds.has(task.id));
+
+    focusTasksCompletedSameDay += completedFromFocus.length;
+    completedOutsidePlanSameDay += completedOutsidePlan.length;
+
+    if (completedFromFocus.length > 0) {
+      daysWithAnyFocusDone += 1;
+    }
+    if (completedFromFocus.length === 0 && completedOutsidePlan.length > 0) {
+      daysWithOnlyOutsidePlanDone += 1;
+    }
+
+    for (const task of completedOutsidePlan) {
+      const project = task.projectName ?? "Без проекта";
+      outsideProjectCounts.set(project, (outsideProjectCounts.get(project) ?? 0) + 1);
+      topOutsidePlanCategories[task.category] += 1;
+      recentOutsidePlanCompleted.push({
+        title: task.title,
+        project,
+        category: task.category,
+        completedAt: task.completedAt,
+      });
+    }
+  }
+
+  const totalCompletedOnPlannedDays = focusTasksCompletedSameDay + completedOutsidePlanSameDay;
+  const patterns: BehaviorPatterns7d = {
+    plannedDays: snapshots.length,
+    focusTasksPlanned,
+    focusTasksCompletedSameDay,
+    completedOutsidePlanSameDay,
+    followThroughRate:
+      focusTasksPlanned > 0 ? Number((focusTasksCompletedSameDay / focusTasksPlanned).toFixed(2)) : 0,
+    outsidePlanRate:
+      totalCompletedOnPlannedDays > 0
+        ? Number((completedOutsidePlanSameDay / totalCompletedOnPlannedDays).toFixed(2))
+        : 0,
+    daysWithAnyFocusDone,
+    daysWithOnlyOutsidePlanDone,
+    topOutsidePlanProjects: Array.from(outsideProjectCounts.entries())
+      .sort((left, right) => right[1] - left[1])
+      .slice(0, 3)
+      .map(([project, count]) => ({ project, count })),
+    topOutsidePlanCategories,
+    recentOutsidePlanCompleted: recentOutsidePlanCompleted
+      .sort((left, right) => right.completedAt.getTime() - left.completedAt.getTime())
+      .slice(0, 5)
+      .map(({ completedAt: _completedAt, ...item }) => item),
+    insights: [],
+  };
+
+  patterns.insights = buildBehaviorInsights(patterns);
+  return patterns;
+};
+
+const storeDailyPlanSnapshot = async (
+  user: User,
+  input: PlanInput,
+  output: PlanOutput
+): Promise<DailyPlanSnapshotValue> => {
+  const referencedTaskIds = Array.from(
+    new Set([
+      ...output.focus.map((item) => item.taskId).filter(Boolean),
+      ...output.fallbackOptions.map((item) => item.forTaskId).filter(Boolean),
+    ])
+  );
+
+  const relatedTasks = referencedTaskIds.length
+    ? await prisma.task.findMany({
+        where: {
+          userId: user.id,
+          id: { in: referencedTaskIds },
+        },
+        select: {
+          id: true,
+          title: true,
+          projectName: true,
+          category: true,
+        },
+      })
+    : [];
+
+  const taskById = new Map(relatedTasks.map((task) => [task.id, task]));
+
+  const snapshot: DailyPlanSnapshotValue = {
+    day: input.today.day,
+    generatedAt: new Date().toISOString(),
+    today: input.today,
+    focus: output.focus.map((item) => {
+      const task = taskById.get(item.taskId);
+      return {
+        taskId: item.taskId,
+        title: task?.title ?? (item.reason || "Без названия"),
+        project: task?.projectName ?? "Без проекта",
+        category: task?.category ?? "UNKNOWN",
+        reason: item.reason,
+      };
+    }),
+    fallbackOptions: output.fallbackOptions.map((item) => {
+      const task = taskById.get(item.forTaskId);
+      return {
+        forTaskId: item.forTaskId,
+        title: task?.title ?? "",
+        alternativeAction: item.alternativeAction,
+        reason: item.reason,
+      };
+    }),
+    doNotDo: output.doNotDo,
+    riskOfTheDay: output.riskOfTheDay,
+    warnings: output.warnings,
+    strategyNote: output.strategyNote,
+  };
+
+  await prisma.userRule.upsert({
+    where: { key: dailyPlanSnapshotRuleKey(user.id, input.today.day) },
+    update: {
+      userId: user.id,
+      isActive: true,
+      value: snapshot as unknown as Prisma.InputJsonValue,
+    },
+    create: {
+      userId: user.id,
+      key: dailyPlanSnapshotRuleKey(user.id, input.today.day),
+      isActive: true,
+      value: snapshot as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return snapshot;
 };
 
 const buildTasksStats7d = async (userId: string, day: DateTime) => {
@@ -219,12 +662,14 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
 
   const yesterday = day.minus({ days: 1 });
 
-  const [morningCheckIn, yesterdayEveningCheckIn, features7d, tasksStats7d, emotion7d, activeTasks, focusProject, rules] = await Promise.all([
+  const [agentMode, morningCheckIn, yesterdayEveningCheckIn, features7d, tasksStats7d, emotion7d, behaviorPatterns7d, activeTasks, focusProject, rules] = await Promise.all([
+    getAgentModeForUser(user.id),
     getMorningCheckIn(user.id, day),
     getEveningCheckIn(user.id, yesterday),
     getFeatures7dAggregate(user.id, day),
     buildTasksStats7d(user.id, day),
     buildEmotionStats7d(user.id, day),
+    buildBehaviorPatternsForPeriod(user, day.minus({ days: 6 }), day),
     prisma.task.findMany({
       where: {
         userId: user.id,
@@ -246,6 +691,7 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
   ]);
 
   return {
+    agentMode,
     today: {
       day: day.toFormat("yyyy-LL-dd"),
       energy: morningCheckIn?.energy ?? 3,
@@ -263,6 +709,7 @@ export const buildPlanInput = async (user: User): Promise<PlanInput> => {
     features7d,
     tasksStats7d,
     emotion7d,
+    behaviorPatterns7d,
     activeTasks: activeTasks.map(toPlanTask),
     focusProject: focusProject
       ? {
@@ -284,6 +731,7 @@ const suggestionsRuleKey = (userId: string) => `${PLAN_SUGGESTIONS_RULE_PREFIX}$
 export const runPlanAndStoreSuggestions = async (user: User): Promise<PlanOutput> => {
   const input = await buildPlanInput(user);
   const output = await generatePlan(input);
+  const snapshot = await storeDailyPlanSnapshot(user, input, output);
 
   await prisma.userRule.upsert({
     where: { key: suggestionsRuleKey(user.id) },
@@ -302,7 +750,7 @@ export const runPlanAndStoreSuggestions = async (user: User): Promise<PlanOutput
 
   const text = truncate(
     [
-      `Фокус: ${output.focus.map((item) => item.taskId).join(", ") || "—"}`,
+      `Фокус: ${snapshot.focus.map((item) => item.title).join(", ") || "—"}`,
       `Не делать: ${output.doNotDo || "—"}`,
       `Риск дня: ${output.riskOfTheDay || "—"}`,
       `Предупреждения: ${output.warnings.join("; ") || "—"}`,
@@ -593,6 +1041,7 @@ export const runRollingWeeklyReview = async (user: User): Promise<string> => {
   const now = DateTime.now().setZone(user.timezone);
   const from = now.minus({ days: 7 });
   const to = now;
+  const agentMode = await getAgentModeForUser(user.id);
 
   const stats = await buildReviewStats({
     userId: user.id,
@@ -608,8 +1057,10 @@ export const runRollingWeeklyReview = async (user: User): Promise<string> => {
     to,
   });
   const focusProject = await getActiveFocusProject(user.id);
+  const planBehavior = await buildBehaviorPatternsForPeriod(user, from, to);
 
   const weeklyInput: WeeklyReviewInput = {
+    agentMode,
     periodDescription: `${from.toFormat("dd.LL.yyyy HH:mm")} — ${to.toFormat("dd.LL.yyyy HH:mm")}`,
     weeklyFeatures: {
       tasksAdded: stats.tasksAdded,
@@ -638,6 +1089,7 @@ export const runRollingWeeklyReview = async (user: User): Promise<string> => {
           metric: focusProject.metric,
         }
       : null,
+    planBehavior,
   };
 
   const analysis = await generateWeeklyReviewAnalysis(weeklyInput);
